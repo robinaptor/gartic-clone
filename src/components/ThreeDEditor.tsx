@@ -3,6 +3,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { Box, Eraser, Trash2 } from 'lucide-react';
+import { FunButton } from './GameComponents'; // On réutilise le bouton
 
 const DRAW_COLORS = ['#000000', '#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ec4899', '#78350f'];
 
@@ -120,7 +121,7 @@ export const ThreeDEditor = ({ onSave, isReadOnly }: { onSave: (data: string) =>
                 <div className="flex gap-2 w-full justify-center">
                     <button onClick={() => setIsEraser(false)} className={`flex-1 p-2 rounded-xl border-2 border-black flex items-center justify-center gap-2 ${!isEraser ? 'bg-blue-500 text-white shadow-hard-sm' : 'bg-gray-100'}`}><Box size={20} /> Bloc</button>
                     <button onClick={() => setIsEraser(true)} className={`flex-1 p-2 rounded-xl border-2 border-black flex items-center justify-center gap-2 ${isEraser ? 'bg-red-500 text-white shadow-hard-sm' : 'bg-gray-100'}`}><Eraser size={20} /> Gomme</button>
-                    <button onClick={() => onSave(captureRef.current())} className="flex-1 bg-green-500 text-white border-2 border-black rounded-xl font-black uppercase shadow-hard-sm">FINI</button>
+                    <FunButton onClick={() => onSave(captureRef.current())} color="green" className="py-2 text-sm">FINI</FunButton>
                 </div>
                 <div className="grid grid-cols-10 gap-1 w-full">
                     {DRAW_COLORS.map((c) => (
