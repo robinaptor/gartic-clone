@@ -31,7 +31,10 @@ import {
   ArrowRight,
   Ghost,
   MessageSquare,
-  XCircle
+  XCircle,
+  Camera,
+  Upload,
+  RefreshCw
 } from 'lucide-react';
 
 // --- CONFIGURATION FIREBASE ---
@@ -47,8 +50,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// IDENTIFIANT UNIQUE POUR QUE TOUT LE MONDE SOIT AU MÊME ENDROIT
-const appId = 'gartic-final-prod'; 
+// IDENTIFIANT DE VERSION (Changer si besoin de reset)
+const appId = 'gartic-final-trad-v1'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
@@ -64,13 +67,12 @@ const GlobalStyles = () => (
     .shadow-hard-lg { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-sm { box-shadow: 2px 2px 0px 0px rgba(0,0,0,1); }
     .touch-none { touch-action: none; }
-    /* Empêche le scroll horizontal sur mobile */
     html, body { overflow-x: hidden; width: 100%; }
   `}</style>
 );
 
 // --- TYPES ---
-type GameMode = 'CLASSIC' | 'EXQUISITE';
+type GameMode = 'CLASSIC' | 'EXQUISITE' | 'TRADITIONAL';
 type Phase = 'LOBBY' | 'WRITE_START' | 'DRAW' | 'GUESS' | 'VOTE' | 'PODIUM' | 'RESULTS' | 'EXQUISITE_DRAW';
 
 interface Player {
@@ -192,6 +194,142 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
   </div>
 );
 
+// --- COMPOSANT CAMÉRA (MODE TRADITIONNEL) ---
+const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [stream, setStream] = useState<MediaStream | null>(null);
+    const [capturedImage, setCapturedImage] = useState<string | null>(null);
+    const [error, setError] = useState<string>('');
+
+    const startCamera = async () => {
+        try {
+            const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'environment' } // Utilise la caméra arrière sur mobile
+            });
+            setStream(mediaStream);
+            if (videoRef.current) videoRef.current.srcObject = mediaStream;
+            setError('');
+        } catch (err) {
+            console.error(err);
+            setError("Impossible d'accéder à la caméra. Vérifie les permissions ou utilise l'upload.");
+        }
+    };
+
+    const stopCamera = () => {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            setStream(null);
+        }
+    };
+
+    const takePhoto = () => {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (video && canvas) {
+            // On redimensionne pour éviter les fichiers énormes
+            const ratio = video.videoHeight / video.videoWidth;
+            const width = Math.min(800, video.videoWidth);
+            const height = width * ratio;
+
+            canvas.width = width;
+            canvas.height = height;
+            
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(video, 0, 0, width, height);
+                // Compression importante (0.5) pour Firestore
+                const data = canvas.toDataURL('image/jpeg', 0.5);
+                setCapturedImage(data);
+                stopCamera();
+            }
+        }
+    };
+
+    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = canvasRef.current;
+                    if(canvas){
+                        const ratio = img.height / img.width;
+                        const width = Math.min(800, img.width);
+                        const height = width * ratio;
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx?.drawImage(img, 0, 0, width, height);
+                        setCapturedImage(canvas.toDataURL('image/jpeg', 0.5));
+                    }
+                };
+                img.src = event.target?.result as string;
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const retake = () => {
+        setCapturedImage(null);
+        startCamera();
+    };
+
+    const confirm = () => {
+        if (capturedImage) onCapture(capturedImage);
+    };
+
+    useEffect(() => {
+        startCamera();
+        return () => stopCamera();
+    }, []);
+
+    if (capturedImage) {
+        return (
+            <div className="w-full flex flex-col items-center gap-4">
+                <img src={capturedImage} className="w-full max-w-md rounded-xl border-4 border-black shadow-hard transform rotate-1" alt="Captured" />
+                <div className="flex gap-4">
+                    <FunButton onClick={retake} color="red" icon={RefreshCw}>Refaire</FunButton>
+                    <FunButton onClick={confirm} color="green" icon={CheckCircle}>Envoyer</FunButton>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="w-full flex flex-col items-center gap-4">
+            <div className="relative w-full max-w-md bg-black rounded-xl overflow-hidden border-4 border-black shadow-hard aspect-[4/3]">
+                {stream ? (
+                    <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                ) : (
+                    <div className="w-full h-full flex items-center justify-center text-white p-4 text-center">
+                        {error || <Loader2 className="animate-spin" />}
+                    </div>
+                )}
+                <canvas ref={canvasRef} className="hidden" />
+            </div>
+
+            <div className="flex flex-col gap-3 w-full max-w-md">
+                <FunButton onClick={takePhoto} disabled={!stream} color="purple" icon={Camera} className="w-full">Prendre Photo</FunButton>
+                
+                <div className="relative">
+                    <div className="absolute inset-0 flex items-center"><div className="w-full border-t-2 border-black/20"></div></div>
+                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-pattern px-2 text-gray-900 font-bold">Ou import fichier</span></div>
+                </div>
+
+                <label className="cursor-pointer w-full">
+                     <div className="bg-white border-2 border-black border-dashed rounded-xl p-3 flex items-center justify-center gap-2 font-bold hover:bg-gray-50 text-gray-600 transition-all">
+                        <Upload size={20} /> Choisir une image
+                     </div>
+                     <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                </label>
+            </div>
+        </div>
+    );
+};
+
+// --- COMPOSANT DESSIN ---
 const DrawingCanvas = ({ 
     initialImage, 
     onSave, 
@@ -255,6 +393,8 @@ const DrawingCanvas = ({
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     let clientX = 0, clientY = 0;
     if ('touches' in event) {
        clientX = event.touches[0].clientX;
@@ -263,8 +403,6 @@ const DrawingCanvas = ({
        clientX = (event as React.MouseEvent).clientX;
        clientY = (event as React.MouseEvent).clientY;
     }
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
     return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
   };
 
@@ -534,7 +672,7 @@ export default function App() {
     await updateDoc(roomRef, updates);
   };
 
-  const submitContent = async () => {
+  const submitContent = async (contentOverride?: string) => {
     if (!currentRoom || !myId) return;
     setIsReady(true);
     const myIndex = currentRoom.players.findIndex(p => p.uid === myId);
@@ -543,10 +681,14 @@ export default function App() {
     const ownerId = currentRoom.players[ownerIndex].uid;
 
     let stepType: 'TEXT' | 'DRAWING' = 'DRAWING';
-    if (currentRoom.mode === 'CLASSIC') stepType = currentRoom.round % 2 === 0 ? 'TEXT' : 'DRAWING';
+    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL') {
+        stepType = currentRoom.round % 2 === 0 ? 'TEXT' : 'DRAWING';
+    }
 
-    if (stepType === 'DRAWING' && inputContent.length > 900000) {
-        alert("Ton dessin est trop complexe ! Fais moins de traits.");
+    const finalContent = contentOverride || inputContent;
+
+    if (stepType === 'DRAWING' && finalContent.length > 900000) {
+        alert("Ton image est trop lourde !");
         setIsReady(false);
         return;
     }
@@ -555,7 +697,7 @@ export default function App() {
       type: stepType,
       authorId: myId,
       authorName: currentRoom.players.find(p => p.uid === myId)?.name || 'Inconnu',
-      content: inputContent,
+      content: finalContent,
       votes: 0
     };
 
@@ -599,7 +741,10 @@ export default function App() {
             const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
             updateDoc(roomRef, { phase: 'VOTE', players: currentRoom.players.map(p => ({...p, isReady: false, hasVoted: false})) });
         } else {
-            let nextPhase: Phase = currentRoom.mode === 'CLASSIC' ? ((currentRoom.round + 1) % 2 === 0 ? 'GUESS' : 'DRAW') : 'EXQUISITE_DRAW';
+            let nextPhase: Phase = (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL') 
+                ? ((currentRoom.round + 1) % 2 === 0 ? 'GUESS' : 'DRAW') 
+                : 'EXQUISITE_DRAW';
+            
             const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
             setTimeout(() => {
                 updateDoc(roomRef, { round: increment(1), phase: nextPhase, players: currentRoom.players.map(p => ({...p, isReady: false})) });
@@ -671,21 +816,10 @@ export default function App() {
                         
                         <div className="flex flex-col items-center gap-2 w-full md:w-auto">
                             <span className="font-black text-sm uppercase tracking-widest">Mode de Jeu</span>
-                            <div className="flex gap-2 bg-gray-100 p-1 rounded-xl border-2 border-black w-full md:w-auto justify-center">
-                                <button 
-                                    onClick={() => me?.isHost && updateMode('CLASSIC')}
-                                    className={`px-3 py-2 md:px-4 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-base ${currentRoom.mode === 'CLASSIC' ? 'bg-white border-2 border-black shadow-hard-sm text-black' : 'text-gray-400'}`}
-                                    disabled={!me?.isHost}
-                                >
-                                    <MessageSquare size={16}/> Classique
-                                </button>
-                                <button 
-                                    onClick={() => me?.isHost && updateMode('EXQUISITE')}
-                                    className={`px-3 py-2 md:px-4 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-base ${currentRoom.mode === 'EXQUISITE' ? 'bg-purple-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}
-                                    disabled={!me?.isHost}
-                                >
-                                    <Ghost size={16}/> Exquis
-                                </button>
+                            <div className="flex flex-wrap gap-2 bg-gray-100 p-1 rounded-xl border-2 border-black w-full md:w-auto justify-center">
+                                <button onClick={() => me?.isHost && updateMode('CLASSIC')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'CLASSIC' ? 'bg-white border-2 border-black shadow-hard-sm text-black' : 'text-gray-400'}`}><MessageSquare size={14}/> Classique</button>
+                                <button onClick={() => me?.isHost && updateMode('EXQUISITE')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'EXQUISITE' ? 'bg-purple-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Ghost size={14}/> Exquis</button>
+                                <button onClick={() => me?.isHost && updateMode('TRADITIONAL')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'TRADITIONAL' ? 'bg-blue-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Camera size={14}/> Papier</button>
                             </div>
                         </div>
                       </div>
@@ -744,7 +878,7 @@ export default function App() {
                     <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm flex items-center gap-2"><Ghost size={14}/> Exquis</div>
                     <h2 className="text-lg md:text-2xl font-black text-purple-600 truncate max-w-[150px] md:max-w-none">{instruction}</h2>
                 </div>
-                <FunButton onClick={submitContent} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
+                <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
             </div>
             <div className="flex-1 overflow-y-auto bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center">
                  <DrawingCanvas onSave={(data) => setInputContent(data)} guideImage={guideImage} />
@@ -763,7 +897,7 @@ export default function App() {
                     <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-32 md:h-40 p-4 md:p-6 text-xl md:text-3xl text-center font-black border-4 border-black rounded-2xl focus:outline-none focus:shadow-hard resize-none bg-gray-50 leading-normal" placeholder="Un pingouin qui mange une raclette..." maxLength={80}/>
                     <div className="absolute bottom-4 right-4 text-xs font-bold text-gray-400">{inputContent.length}/80</div>
                 </div>
-                <FunButton onClick={submitContent} disabled={!inputContent.trim()} color="purple" className="w-full py-3 md:py-4 text-lg md:text-xl" icon={CheckCircle}>C'est validé !</FunButton>
+                <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" className="w-full py-3 md:py-4 text-lg md:text-xl" icon={CheckCircle}>C'est validé !</FunButton>
             </FunCard>
         </div>
     );
@@ -780,10 +914,16 @@ export default function App() {
                     <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm">DESSINE ÇA</div>
                     <h2 className="text-lg md:text-2xl font-black truncate max-w-[40vw] text-purple-600">"{prevStep.content}"</h2>
                 </div>
-                <FunButton onClick={submitContent} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
+                {currentRoom.mode !== 'TRADITIONAL' && (
+                    <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
+                )}
             </div>
             <div className="flex-1 overflow-y-auto bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center">
-                 <DrawingCanvas onSave={(data) => setInputContent(data)} />
+                 {currentRoom.mode === 'TRADITIONAL' ? (
+                     <CameraCapture onCapture={(data) => submitContent(data)} />
+                 ) : (
+                     <DrawingCanvas onSave={(data) => setInputContent(data)} />
+                 )}
             </div>
         </div>
     );
@@ -803,7 +943,7 @@ export default function App() {
                 <div className="w-full md:w-1/3 p-6 md:p-8 flex flex-col justify-center space-y-6 bg-white">
                      <div className="text-center space-y-2"><h2 className="text-2xl md:text-3xl font-black uppercase leading-none">C'est quoi ce truc ?</h2><p className="text-gray-500 font-bold text-sm">Décris ce chef-d'œuvre.</p></div>
                      <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-24 md:h-32 p-4 text-lg md:text-xl text-center font-bold border-4 border-black rounded-xl focus:outline-none focus:shadow-hard bg-blue-50 resize-none" placeholder="Je pense que c'est..."/>
-                    <FunButton onClick={submitContent} disabled={!inputContent.trim()} color="purple" icon={CheckCircle}>Valider</FunButton>
+                    <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" icon={CheckCircle}>Valider</FunButton>
                 </div>
             </FunCard>
         </div>
@@ -815,7 +955,7 @@ export default function App() {
     if (me?.hasVoted) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-4 text-center text-white space-y-6 bg-pattern"><GlobalStyles /><div className="w-24 h-24 md:w-32 md:h-32 bg-yellow-400 rounded-full border-4 border-black flex items-center justify-center animate-bounce shadow-hard-lg"><Star className="text-black fill-white" size={48} /></div><div><h2 className="text-3xl md:text-4xl font-black uppercase text-yellow-400 drop-shadow-md">Vote Enregistré !</h2><p className="text-white/80 font-bold mt-2 text-lg md:text-xl">Suspense...</p></div><div className="flex flex-wrap gap-3 justify-center mt-8 p-4 bg-black/30 rounded-xl backdrop-blur-sm">{currentRoom.players.map(p => <div key={p.uid} title={p.name} className={`w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-black transition-all ${p.hasVoted ? 'bg-green-400 scale-125' : 'bg-gray-600'}`} />)}</div></div>;
 
     const allDrawings: any[] = [];
-    if (currentRoom.mode === 'CLASSIC') {
+    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL') {
         Object.entries(currentRoom.chains).forEach(([ownerId, chain]) => {
             chain.steps.forEach((step, idx) => {
                 if (step.type === 'DRAWING') allDrawings.push({ chainOwnerId: ownerId, stepIndex: idx, step });
