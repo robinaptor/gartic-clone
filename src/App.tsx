@@ -50,8 +50,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// IDENTIFIANT DE VERSION (Changer si besoin de reset)
-const appId = 'gartic-final-trad-v1'; 
+const appId = 'gartic-final-trad-fixed'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
@@ -194,42 +193,68 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
   </div>
 );
 
-// --- COMPOSANT CAMÉRA (MODE TRADITIONNEL) ---
+// --- COMPOSANT CAMÉRA CORRIGÉ ---
 const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [stream, setStream] = useState<MediaStream | null>(null);
     const [capturedImage, setCapturedImage] = useState<string | null>(null);
+    const [isStreaming, setIsStreaming] = useState(false);
     const [error, setError] = useState<string>('');
 
+    // Lancement de la caméra
     const startCamera = async () => {
+        setIsStreaming(false);
+        setError('');
+        setCapturedImage(null);
+        
         try {
-            const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: 'environment' } // Utilise la caméra arrière sur mobile
-            });
-            setStream(mediaStream);
-            if (videoRef.current) videoRef.current.srcObject = mediaStream;
-            setError('');
+            const constraints = { 
+                video: { 
+                    facingMode: 'environment', // Caméra arrière
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                } 
+            };
+            
+            // Fallback si la caméra "environment" n'existe pas (PC)
+            let mediaStream;
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (e) {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            }
+
+            if (videoRef.current) {
+                videoRef.current.srcObject = mediaStream;
+                // Attendre que les métadonnées soient chargées pour jouer
+                videoRef.current.onloadedmetadata = () => {
+                    videoRef.current?.play();
+                    setIsStreaming(true);
+                };
+            }
         } catch (err) {
-            console.error(err);
-            setError("Impossible d'accéder à la caméra. Vérifie les permissions ou utilise l'upload.");
+            console.error("Erreur Caméra:", err);
+            setError("Caméra inaccessible. Utilise le bouton d'import.");
         }
     };
 
     const stopCamera = () => {
-        if (stream) {
+        if (videoRef.current && videoRef.current.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
             stream.getTracks().forEach(track => track.stop());
-            setStream(null);
+            videoRef.current.srcObject = null;
+            setIsStreaming(false);
         }
     };
 
     const takePhoto = () => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
+        
         if (video && canvas) {
-            // On redimensionne pour éviter les fichiers énormes
+            // Calcul des dimensions pour compresser
             const ratio = video.videoHeight / video.videoWidth;
-            const width = Math.min(800, video.videoWidth);
+            const width = Math.min(600, video.videoWidth); // Max 600px de large
             const height = width * ratio;
 
             canvas.width = width;
@@ -237,11 +262,13 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
             
             const ctx = canvas.getContext('2d');
             if (ctx) {
+                // Dessiner l'image actuelle de la vidéo
                 ctx.drawImage(video, 0, 0, width, height);
-                // Compression importante (0.5) pour Firestore
+                
+                // Convertir en Base64 compressé (JPEG 50%)
                 const data = canvas.toDataURL('image/jpeg', 0.5);
                 setCapturedImage(data);
-                stopCamera();
+                stopCamera(); // Arrêter la caméra pour économiser la batterie
             }
         }
     };
@@ -253,17 +280,20 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
             reader.onload = (event) => {
                 const img = new Image();
                 img.onload = () => {
-                    const canvas = canvasRef.current;
-                    if(canvas){
-                        const ratio = img.height / img.width;
-                        const width = Math.min(800, img.width);
-                        const height = width * ratio;
-                        canvas.width = width;
-                        canvas.height = height;
-                        const ctx = canvas.getContext('2d');
-                        ctx?.drawImage(img, 0, 0, width, height);
-                        setCapturedImage(canvas.toDataURL('image/jpeg', 0.5));
-                    }
+                    // On passe par un canvas pour redimensionner/compresser l'upload aussi
+                    const canvas = document.createElement('canvas');
+                    const ratio = img.height / img.width;
+                    const width = Math.min(600, img.width);
+                    const height = width * ratio;
+                    canvas.width = width;
+                    canvas.height = height;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx?.drawImage(img, 0, 0, width, height);
+                    
+                    const compressedData = canvas.toDataURL('image/jpeg', 0.5);
+                    setCapturedImage(compressedData);
+                    stopCamera(); // Si la caméra tournait, on l'arrête
                 };
                 img.src = event.target?.result as string;
             };
@@ -280,6 +310,7 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
         if (capturedImage) onCapture(capturedImage);
     };
 
+    // Démarrage auto
     useEffect(() => {
         startCamera();
         return () => stopCamera();
@@ -287,11 +318,16 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
 
     if (capturedImage) {
         return (
-            <div className="w-full flex flex-col items-center gap-4">
-                <img src={capturedImage} className="w-full max-w-md rounded-xl border-4 border-black shadow-hard transform rotate-1" alt="Captured" />
-                <div className="flex gap-4">
-                    <FunButton onClick={retake} color="red" icon={RefreshCw}>Refaire</FunButton>
-                    <FunButton onClick={confirm} color="green" icon={CheckCircle}>Envoyer</FunButton>
+            <div className="w-full flex flex-col items-center gap-4 animate-pop">
+                <div className="relative w-full max-w-md">
+                     <img src={capturedImage} className="w-full rounded-xl border-4 border-black shadow-hard" alt="Captured" />
+                     <div className="absolute -top-3 -right-3 bg-green-500 text-white p-2 rounded-full border-2 border-black">
+                        <CheckCircle size={20} />
+                     </div>
+                </div>
+                <div className="flex gap-4 w-full max-w-md">
+                    <FunButton onClick={retake} color="red" icon={RefreshCw} className="flex-1">Refaire</FunButton>
+                    <FunButton onClick={confirm} color="green" icon={ArrowRight} className="flex-1">Envoyer</FunButton>
                 </div>
             </div>
         );
@@ -299,28 +335,44 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
 
     return (
         <div className="w-full flex flex-col items-center gap-4">
-            <div className="relative w-full max-w-md bg-black rounded-xl overflow-hidden border-4 border-black shadow-hard aspect-[4/3]">
-                {stream ? (
-                    <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center text-white p-4 text-center">
-                        {error || <Loader2 className="animate-spin" />}
+            <div className="relative w-full max-w-md bg-black rounded-xl overflow-hidden border-4 border-black shadow-hard aspect-[4/3] flex items-center justify-center">
+                {/* Video Element */}
+                <video 
+                    ref={videoRef} 
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    className={`w-full h-full object-cover ${isStreaming ? 'block' : 'hidden'}`} 
+                />
+                
+                {!isStreaming && !error && (
+                    <div className="text-white flex flex-col items-center">
+                        <Loader2 className="animate-spin mb-2" size={32}/>
+                        <p>Chargement caméra...</p>
                     </div>
                 )}
+                
+                {error && (
+                    <div className="p-4 text-center text-white">
+                        <p className="mb-2">⚠️ {error}</p>
+                    </div>
+                )}
+                
+                {/* Canvas caché pour la capture */}
                 <canvas ref={canvasRef} className="hidden" />
             </div>
 
             <div className="flex flex-col gap-3 w-full max-w-md">
-                <FunButton onClick={takePhoto} disabled={!stream} color="purple" icon={Camera} className="w-full">Prendre Photo</FunButton>
+                <FunButton onClick={takePhoto} disabled={!isStreaming} color="purple" icon={Camera} className="w-full">Prendre Photo</FunButton>
                 
-                <div className="relative">
+                <div className="relative py-2">
                     <div className="absolute inset-0 flex items-center"><div className="w-full border-t-2 border-black/20"></div></div>
-                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-pattern px-2 text-gray-900 font-bold">Ou import fichier</span></div>
+                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-pattern px-2 text-gray-900 font-bold">Ou importer</span></div>
                 </div>
 
                 <label className="cursor-pointer w-full">
-                     <div className="bg-white border-2 border-black border-dashed rounded-xl p-3 flex items-center justify-center gap-2 font-bold hover:bg-gray-50 text-gray-600 transition-all">
-                        <Upload size={20} /> Choisir une image
+                     <div className="bg-white border-2 border-black border-dashed rounded-xl p-3 flex items-center justify-center gap-2 font-bold hover:bg-gray-50 text-gray-600 transition-all active:scale-95">
+                        <Upload size={20} /> Choisir depuis la galerie
                      </div>
                      <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
                 </label>
