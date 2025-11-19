@@ -39,7 +39,7 @@ import {
   Camera,
   Upload,
   RefreshCw,
-  Box // Icone pour le mode 3D
+  Box 
 } from 'lucide-react';
 
 // --- CONFIGURATION FIREBASE ---
@@ -55,7 +55,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const appId = 'gartic-final-omega-v2'; 
+const appId = 'gartic-final-omega-v6-ultra'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
@@ -70,13 +70,26 @@ const GlobalStyles = () => (
     .shadow-hard { box-shadow: 4px 4px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-lg { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-sm { box-shadow: 2px 2px 0px 0px rgba(0,0,0,1); }
-    .touch-none { touch-action: none; }
-    html, body { overflow-x: hidden; width: 100%; }
+    
+    /* OPTIMISATION MOBILE & SCROLL */
+    html, body { 
+        overflow-x: hidden; 
+        width: 100%; 
+        overscroll-behavior: none; 
+        position: fixed; 
+        height: 100%;
+        overflow-y: auto;
+    }
+    
+    .touch-none { 
+        touch-action: none !important; 
+        user-select: none !important; 
+        -webkit-user-select: none !important; 
+    }
   `}</style>
 );
 
 // --- TYPES ---
-// Ajout du mode '3D'
 type GameMode = 'CLASSIC' | 'EXQUISITE' | 'TRADITIONAL' | '3D';
 type Phase = 'LOBBY' | 'WRITE_START' | 'DRAW' | 'GUESS' | 'VOTE' | 'PODIUM' | 'RESULTS' | 'EXQUISITE_DRAW';
 
@@ -120,7 +133,6 @@ const DRAW_COLORS = ['#000000', '#ffffff', '#ef4444', '#f97316', '#eab308', '#22
 const BRUSH_SIZES = [4, 8, 16, 32];
 
 // --- COMPOSANTS UI ---
-
 const FunButton = ({ onClick, disabled, children, color = 'yellow', className = '', icon: Icon }: any) => {
   const colorClasses: any = {
     yellow: 'bg-yellow-400 hover:bg-yellow-300 border-yellow-900 text-black',
@@ -168,17 +180,14 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
     ${hasVoted ? 'ring-4 ring-yellow-400' : ''}
   `}>
     {isHost && <Crown size={20} className="absolute -top-3 -right-3 md:-top-4 md:-right-4 text-yellow-500 fill-yellow-400 rotate-12 drop-shadow-md animate-bounce" />}
-    
     {canKick && !isMe && (
       <button 
         onClick={() => onKick(uid, name)}
         className="absolute -top-2 -left-2 bg-red-500 text-white p-1 rounded-full border-2 border-black hover:scale-110 transition-transform z-10 shadow-sm md:opacity-0 md:group-hover:opacity-100 opacity-100"
-        title="Éjecter le joueur"
       >
         <XCircle size={14} strokeWidth={3} />
       </button>
     )}
-
     <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full border-4 border-black flex items-center justify-center text-xl md:text-2xl font-black text-white mb-2 ${color} shadow-inner`}>
       {name.charAt(0).toUpperCase()}
     </div>
@@ -186,61 +195,218 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
       <div className="font-bold text-black truncate w-full text-xs md:text-base leading-tight">{name}</div>
       {isMe && <div className="text-[10px] font-black text-purple-600 uppercase tracking-wider">(Moi)</div>}
     </div>
-    {isReady && (
-      <div className="absolute -bottom-3 bg-green-500 text-white text-[10px] md:text-xs font-bold px-2 py-1 rounded-full border-2 border-black flex items-center gap-1">
-        <CheckCircle size={10} /> PRÊT
-      </div>
-    )}
-     {hasVoted && (
-      <div className="absolute -bottom-3 bg-yellow-400 text-black text-[10px] md:text-xs font-bold px-2 py-1 rounded-full border-2 border-black flex items-center gap-1">
-        <Star size={10} fill="black"/> A VOTÉ
-      </div>
-    )}
+    {isReady && <div className="absolute -bottom-3 bg-green-500 text-white text-[10px] md:text-xs font-bold px-2 py-1 rounded-full border-2 border-black flex items-center gap-1"><CheckCircle size={10} /> PRÊT</div>}
+    {hasVoted && <div className="absolute -bottom-3 bg-yellow-400 text-black text-[10px] md:text-xs font-bold px-2 py-1 rounded-full border-2 border-black flex items-center gap-1"><Star size={10} fill="black"/> A VOTÉ</div>}
   </div>
 );
 
-// --- COMPOSANT MODE 3D (NOUVEAU) ---
+// --- COMPOSANTS 3D OPTIMISÉS ---
+
+// 1. SCÈNE VOXEL (Fix Gomme & Tolérance Clic)
 const VoxelScene = ({ color, isEraser, onCaptureRef }: any) => {
   const [cubes, setCubes] = useState<any[]>([]);
+  
+  const ghostRef = useRef<THREE.Mesh>(null);
   const { gl, scene, camera } = useThree();
+  const interaction = useRef({ startX: 0, startY: 0, isDown: false });
 
   useEffect(() => {
     onCaptureRef.current = () => {
+      const prevGrid = scene.getObjectByName('grid-helper');
+      if(prevGrid) prevGrid.visible = false;
+      if(ghostRef.current) ghostRef.current.visible = false; 
+      
       gl.render(scene, camera);
+      
+      if(prevGrid) prevGrid.visible = true;
       return gl.domElement.toDataURL('image/jpeg', 0.6);
     };
   }, [gl, scene, camera, onCaptureRef]);
 
-  const handleClick = (e: any) => {
+  const updateGhost = (visible: boolean, position?: [number, number, number], isEraserMode?: boolean) => {
+      if (ghostRef.current) {
+          ghostRef.current.visible = visible;
+          if (position) {
+              ghostRef.current.position.set(...position);
+          }
+          if (isEraserMode !== undefined) {
+             const mat = ghostRef.current.material as THREE.MeshBasicMaterial;
+             mat.color.set(isEraserMode ? '#ff0000' : color);
+             mat.opacity = isEraserMode ? 0.5 : 0.5;
+          }
+      }
+  };
+
+  const calculateVoxelPosition = (point: THREE.Vector3, normal: THREE.Vector3) => {
+    const target = point.clone();
+    target.addScaledVector(normal, 0.1); // Petite marge pour être DANS la case
+
+    const x = Math.floor(target.x);
+    const y = Math.floor(target.y);
+    const z = Math.floor(target.z);
+
+    return {
+        grid: [x, y, z],
+        display: [x + 0.5, y + 0.5, z + 0.5] as [number, number, number]
+    };
+  };
+
+  const handlePointerMove = (e: any) => {
     e.stopPropagation();
-    if (e.delta > 10) return; 
-    if (isEraser) {
-      if (e.object.name === 'voxel') setCubes(cubes.filter((c) => c.id !== e.object.userData.id));
-    } else {
-      const { point, face } = e;
-      if (!point || !face) return;
-      const pos = new THREE.Vector3().copy(point).add(face.normal).floor().addScalar(0.5);
-      if (Math.abs(pos.x) > 10 || Math.abs(pos.z) > 10 || pos.y < 0 || pos.y > 15) return;
-      setCubes([...cubes, { id: Math.random().toString(36), position: [pos.x, pos.y, pos.z], color }]);
+    const { point, face, object } = e;
+    
+    if (!point || !face) {
+        updateGhost(false);
+        return;
     }
+
+    if (isEraser) {
+        // Si on survole un cube (userData.id présent)
+        if (object.userData.id) {
+            updateGhost(true, object.position.toArray(), true);
+        } else {
+            updateGhost(false);
+        }
+        return;
+    }
+
+    const calc = calculateVoxelPosition(point, face.normal);
+    
+    const [x, y, z] = calc.grid;
+    if (Math.abs(x) > 10 || Math.abs(z) > 10 || y < 0 || y > 15) {
+        updateGhost(false);
+        return;
+    }
+
+    updateGhost(true, calc.display, false);
+  };
+
+  const handlePointerOut = () => updateGhost(false);
+
+  const onDown = (e: any) => {
+      e.stopPropagation();
+      interaction.current.startX = e.clientX;
+      interaction.current.startY = e.clientY;
+      interaction.current.isDown = true;
+      handlePointerMove(e); 
+  };
+
+  const onUp = (e: any) => {
+      if (!interaction.current.isDown) return;
+      interaction.current.isDown = false;
+
+      const dist = Math.sqrt(
+          Math.pow(e.clientX - interaction.current.startX, 2) +
+          Math.pow(e.clientY - interaction.current.startY, 2)
+      );
+
+      // TOLÉRANCE AUGMENTÉE (30px) : On peut bouger la souris un peu et ça clique quand même
+      if (dist < 30) { 
+          e.stopPropagation();
+          const { point, face, object } = e;
+          if (!point || !face) return;
+
+          if (isEraser) {
+              // Si on clique sur un cube
+              if (object.userData.id) {
+                  setCubes(prev => prev.filter(c => c.id !== object.userData.id));
+                  updateGhost(false);
+              }
+          } else {
+              const calc = calculateVoxelPosition(point, face.normal);
+              
+              if (calc.grid[1] < 0) return; 
+
+              const [gx, gy, gz] = calc.display;
+              const exists = cubes.some(c => 
+                  Math.abs(c.position[0] - gx) < 0.01 && 
+                  Math.abs(c.position[1] - gy) < 0.01 && 
+                  Math.abs(c.position[2] - gz) < 0.01
+              );
+
+              if (!exists) {
+                  setCubes(prev => [...prev, { 
+                      id: Math.random().toString(36), 
+                      position: calc.display, 
+                      color 
+                  }]);
+              }
+          }
+      }
+  };
+
+  const interactiveEvents = {
+      onPointerMove: handlePointerMove,
+      onPointerOut: handlePointerOut,
+      onPointerDown: onDown,
+      onPointerUp: onUp
   };
 
   return (
     <>
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
+      <ambientLight intensity={0.7} />
+      <directionalLight position={[10, 20, 10]} intensity={1.2} castShadow />
       <OrbitControls makeDefault maxPolarAngle={Math.PI / 2} />
+
       <group>
-        <Grid position={[0, -0.01, 0]} args={[20, 20]} cellColor="#6b7280" sectionColor="#000000" sectionThickness={1.5} cellThickness={0.5} infiniteGrid fadeDistance={30} />
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} onPointerUp={(e) => !isEraser && handleClick(e)}><planeGeometry args={[20, 20]} /><meshBasicMaterial visible={false} /></mesh>
+        {/* CUBE FANTÔME */}
+        <mesh ref={ghostRef} visible={false} raycast={() => null}>
+           <boxGeometry args={[1.01, 1.01, 1.01]} />
+           <meshBasicMaterial transparent depthTest={false} />
+           <lineSegments>
+             <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
+             <lineBasicMaterial color="black" opacity={0.3} transparent />
+           </lineSegments>
+        </mesh>
+
+        <Grid 
+            name="grid-helper"
+            position={[0, -0.01, 0]} 
+            args={[20, 20]} 
+            cellColor="#6b7280" 
+            sectionColor="#000000" 
+            infiniteGrid 
+            fadeDistance={30} 
+            pointerEvents="none"
+        />
+
+        {/* SOL INVISIBLE */}
+        <mesh 
+            rotation={[-Math.PI / 2, 0, 0]} 
+            position={[0, 0, 0]} 
+            visible={false}
+            {...interactiveEvents} 
+        >
+            <planeGeometry args={[100, 100]} />
+            <meshBasicMaterial side={THREE.DoubleSide} />
+        </mesh>
+
+        {/* CUBES POSÉS */}
         {cubes.map((c) => (
-          <mesh key={c.id} position={c.position} name="voxel" userData={{ id: c.id }} onPointerUp={handleClick}>
-            <boxGeometry args={[1, 1, 1]} /><meshStandardMaterial color={c.color} />
-            <lineSegments><edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} /><lineBasicMaterial color="black" linewidth={2} /></lineSegments>
+          <mesh 
+            key={c.id} 
+            position={c.position} 
+            userData={{ id: c.id }}
+            {...interactiveEvents} 
+          >
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color={c.color} />
+            {/* FIX CRITIQUE GOMME : 
+                pointerEvents="none" sur les lignes permet de cliquer "à travers" elles.
+                Sinon le clic touchait la ligne noire (qui n'a pas d'ID) au lieu du cube.
+            */}
+            <lineSegments pointerEvents="none">
+                <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
+                <lineBasicMaterial color="black" linewidth={2} />
+            </lineSegments>
           </mesh>
         ))}
-        <mesh position={[0, -0.5, 0]} rotation={[-Math.PI/2, 0, 0]}><planeGeometry args={[20, 20]} /><meshBasicMaterial color="#f3f4f6" opacity={0.5} transparent /></mesh>
       </group>
+      
+      <mesh position={[0, -0.1, 0]} rotation={[-Math.PI/2, 0, 0]} pointerEvents="none">
+        <planeGeometry args={[50, 50]} />
+        <meshBasicMaterial color="#e5e7eb" />
+      </mesh>
     </>
   );
 };
@@ -252,21 +418,34 @@ const ThreeDEditor = ({ onSave }: { onSave: (data: string) => void }) => {
 
   return (
     <div className="flex flex-col gap-4 items-center w-full h-full">
-       <div className="relative w-full flex-1 bg-gray-100 rounded-xl border-4 border-black shadow-hard-lg overflow-hidden">
-          <div className="absolute top-2 left-2 z-10 bg-black/50 text-white text-[10px] px-2 py-1 rounded pointer-events-none">1 doigt: tourner • Tap: poser</div>
-          <Canvas gl={{ preserveDrawingBuffer: true }} shadows camera={{ position: [5, 5, 5], fov: 50 }}>
-             <Suspense fallback={null}><VoxelScene color={color} isEraser={isEraser} onCaptureRef={captureRef} /></Suspense>
+       <div className="relative w-full flex-1 bg-gray-50 rounded-xl border-4 border-black shadow-hard-lg overflow-hidden touch-none cursor-crosshair">
+          <div className="absolute top-2 left-2 z-10 bg-black/70 text-white text-xs px-3 py-2 rounded-lg pointer-events-none font-bold backdrop-blur-sm border border-white/20">
+             🖱️ Clic gauche: Poser/Gommer<br/>
+             ✋ Glisser: Tourner caméra
+          </div>
+          <Canvas 
+            gl={{ preserveDrawingBuffer: true, antialias: true }} 
+            shadows 
+            camera={{ position: [8, 8, 8], fov: 45 }}
+          >
+             <Suspense fallback={null}>
+                <VoxelScene color={color} isEraser={isEraser} onCaptureRef={captureRef} />
+             </Suspense>
           </Canvas>
        </div>
-       <div className="bg-white border-4 border-black rounded-2xl p-2 shadow-hard w-full">
-            <div className="flex flex-col gap-2 items-center justify-center">
-                <div className="flex gap-2 w-full justify-center">
-                    <button onClick={() => setIsEraser(false)} className={`flex-1 p-2 rounded-xl border-2 border-black flex items-center justify-center gap-2 ${!isEraser ? 'bg-blue-500 text-white shadow-hard-sm' : 'bg-gray-100'}`}><Box size={20} /> Bloc</button>
-                    <button onClick={() => setIsEraser(true)} className={`flex-1 p-2 rounded-xl border-2 border-black flex items-center justify-center gap-2 ${isEraser ? 'bg-red-500 text-white shadow-hard-sm' : 'bg-gray-100'}`}><Eraser size={20} /> Gomme</button>
-                    <FunButton onClick={() => onSave(captureRef.current())} color="green" className="py-2 text-sm">FINI</FunButton>
+
+       <div className="bg-white border-4 border-black rounded-2xl p-3 shadow-hard w-full">
+            <div className="flex flex-col gap-3 items-center justify-center">
+                <div className="flex gap-3 w-full justify-center">
+                    <button onClick={() => setIsEraser(false)} className={`flex-1 py-3 rounded-xl border-2 border-black flex items-center justify-center gap-2 font-black uppercase transition-all ${!isEraser ? 'bg-blue-500 text-white shadow-hard-sm translate-y-[-2px]' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}><Box size={20} strokeWidth={3} /> Bloc</button>
+                    <button onClick={() => setIsEraser(true)} className={`flex-1 py-3 rounded-xl border-2 border-black flex items-center justify-center gap-2 font-black uppercase transition-all ${isEraser ? 'bg-red-500 text-white shadow-hard-sm translate-y-[-2px]' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}><Eraser size={20} strokeWidth={3} /> Gomme</button>
+                    <FunButton onClick={() => onSave(captureRef.current())} color="green" className="py-2 text-sm px-8">FINI !</FunButton>
                 </div>
-                <div className="grid grid-cols-10 gap-1 w-full">
-                    {DRAW_COLORS.map((c) => <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`aspect-square rounded-full border-2 border-black ${color === c && !isEraser ? 'ring-2 ring-blue-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />)}
+                <div className="w-full h-px bg-gray-200"></div>
+                <div className="flex flex-wrap justify-center gap-2 w-full px-2">
+                    {DRAW_COLORS.map((c) => (
+                        <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-black transition-transform ${color === c && !isEraser ? 'ring-4 ring-blue-400 scale-110 z-10 shadow-lg' : 'hover:scale-105'}`} style={{ backgroundColor: c }} />
+                    ))}
                 </div>
             </div>
        </div>
@@ -274,8 +453,7 @@ const ThreeDEditor = ({ onSave }: { onSave: (data: string) => void }) => {
   );
 };
 
-
-// --- COMPOSANT CAMÉRA CORRIGÉ ---
+// --- COMPOSANT CAMÉRA ---
 const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -364,7 +542,7 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
     );
 };
 
-// --- COMPOSANT DESSIN ---
+// --- COMPOSANT DESSIN ROBUSTE ---
 const DrawingCanvas = ({ 
     initialImage, 
     onSave, 
@@ -380,17 +558,17 @@ const DrawingCanvas = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [color, setColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(8);
-  const [isDrawing, setIsDrawing] = useState(false);
   const [isEraser, setIsEraser] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [dimensions, setDimensions] = useState({ width: 600, height: 450 });
+
+  const state = useRef({ isDrawing: false, lastX: 0, lastY: 0 });
 
   useLayoutEffect(() => {
       const updateSize = () => {
           if (containerRef.current) {
              const width = containerRef.current.offsetWidth;
-             const finalWidth = Math.min(width, 800); 
-             setDimensions({ width: finalWidth, height: finalWidth * 0.75 });
+             setDimensions({ width: width, height: width * 0.75 });
           }
       };
       window.addEventListener('resize', updateSize); updateSize();
@@ -398,67 +576,87 @@ const DrawingCanvas = ({
   }, []);
 
   useEffect(() => {
-    const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
+    const canvas = canvasRef.current; 
+    const ctx = canvas?.getContext('2d');
     if (canvas && ctx) {
-        if (history.length === 0 && !initialImage) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
         ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        if (history.length === 0 && !initialImage) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
         if (initialImage) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, dimensions.width, dimensions.height); img.src = initialImage; }
     }
   }, [initialImage, dimensions]);
 
-  const saveState = () => { const canvas = canvasRef.current; if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.4)]); }
-  const getCoordinates = (e: any) => {
-    const canvas = canvasRef.current; if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    let cx = e.touches ? e.touches[0].clientX : e.clientX;
-    let cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (cx - rect.left) * (canvas.width / rect.width), y: (cy - rect.top) * (canvas.height / rect.height) };
+  const saveState = () => { const canvas = canvasRef.current; if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.5)]); };
+
+  const getCoords = (e: PointerEvent, canvas: HTMLCanvasElement) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (e.clientX - rect.left) * (canvas.width / rect.width), y: (e.clientY - rect.top) * (canvas.height / rect.height) };
   };
 
-  const startDrawing = (e: any) => {
-    if (isReadOnly) return; if (e.cancelable) e.preventDefault();
-    const { x, y } = getCoordinates(e);
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    saveState(); setIsDrawing(true);
-    ctx.beginPath(); ctx.moveTo(x, y);
-    ctx.strokeStyle = isEraser ? '#ffffff' : color; ctx.lineWidth = brushSize;
-  };
+  useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || isReadOnly) return;
 
-  const draw = (e: any) => {
-    if (!isDrawing || isReadOnly) return; if (e.cancelable) e.preventDefault();
-    const { x, y } = getCoordinates(e);
-    const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) { ctx.lineTo(x, y); ctx.stroke(); }
-  };
+      const handlePointerDown = (e: PointerEvent) => {
+          e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+          saveState();
+          state.current.isDrawing = true;
+          const { x, y } = getCoords(e, canvas);
+          state.current.lastX = x; state.current.lastY = y;
+          const ctx = canvas.getContext('2d');
+          if (ctx) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y); ctx.strokeStyle = isEraser ? '#ffffff' : color; ctx.lineWidth = brushSize; ctx.stroke(); }
+      };
 
-  const stopDrawing = (e: any) => {
-    if (isReadOnly) return; if (e && e.cancelable) e.preventDefault();
-    setIsDrawing(false);
-    const canvas = canvasRef.current;
-    if (canvas) onSave(canvas.toDataURL('image/jpeg', 0.35));
-  };
+      const handlePointerMove = (e: PointerEvent) => {
+          e.preventDefault(); 
+          if (!state.current.isDrawing) return;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              const { x, y } = getCoords(e, canvas);
+              ctx.beginPath(); ctx.moveTo(state.current.lastX, state.current.lastY); ctx.lineTo(x, y); ctx.strokeStyle = isEraser ? '#ffffff' : color; ctx.lineWidth = brushSize; ctx.stroke();
+              state.current.lastX = x; state.current.lastY = y;
+          }
+      };
+
+      const handlePointerUp = (e: PointerEvent) => {
+          e.preventDefault();
+          if (state.current.isDrawing) {
+              state.current.isDrawing = false;
+              canvas.releasePointerCapture(e.pointerId);
+              onSave(canvas.toDataURL('image/jpeg', 0.4));
+          }
+      };
+
+      canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
+      canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
+      canvas.addEventListener('pointerup', handlePointerUp);
+      canvas.addEventListener('pointercancel', handlePointerUp);
+      canvas.addEventListener('pointerleave', handlePointerUp);
+
+      return () => {
+          canvas.removeEventListener('pointerdown', handlePointerDown);
+          canvas.removeEventListener('pointermove', handlePointerMove);
+          canvas.removeEventListener('pointerup', handlePointerUp);
+          canvas.removeEventListener('pointercancel', handlePointerUp);
+          canvas.removeEventListener('pointerleave', handlePointerUp);
+      };
+  }, [isReadOnly, color, brushSize, isEraser, dimensions]);
 
   const undo = () => {
     if (history.length === 0) return;
     const lastState = history[history.length - 1];
     setHistory(prev => prev.slice(0, -1));
     const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-    if (canvas && ctx && lastState) {
-      const img = new Image();
-      img.onload = () => { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(img, 0, 0); onSave(canvas.toDataURL('image/jpeg', 0.35)); };
-      img.src = lastState;
-    }
+    if (canvas && ctx && lastState) { const img = new Image(); img.onload = () => { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(img, 0, 0); onSave(canvas.toDataURL('image/jpeg', 0.4)); }; img.src = lastState; }
   };
 
   const clearCanvas = () => {
     const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-    if(canvas && ctx) { saveState(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width, canvas.height); onSave(canvas.toDataURL('image/jpeg', 0.35)); }
+    if(canvas && ctx) { saveState(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width, canvas.height); onSave(canvas.toDataURL('image/jpeg', 0.4)); }
   };
 
   return (
     <div className="flex flex-col gap-4 items-center w-full max-w-5xl mx-auto">
-        <div ref={containerRef} className="relative w-full bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group" style={{ height: dimensions.height }}>
+        <div ref={containerRef} className="relative w-full bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group" style={{ height: dimensions.height, touchAction: 'none' }}>
             {guideImage && (
                 <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
                     <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
@@ -467,7 +665,7 @@ const DrawingCanvas = ({
                     </div>
                 </div>
             )}
-            <canvas ref={canvasRef} width={dimensions.width} height={dimensions.height} className={`block touch-none ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing} />
+            <canvas ref={canvasRef} width={dimensions.width} height={dimensions.height} style={{ touchAction: 'none', width: '100%', height: '100%' }} className={`block touch-none select-none ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`} />
             {!isReadOnly && (
                 <div className="absolute top-2 left-2 md:top-4 md:left-4 flex gap-2 z-20">
                     <button onClick={undo} disabled={history.length === 0} className="bg-white border-2 border-black p-2 rounded-lg hover:bg-gray-100 shadow-hard-sm disabled:opacity-50"><Undo size={20}/></button>
