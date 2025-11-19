@@ -3,8 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
-  onAuthStateChanged, 
-  signInWithCustomToken 
+  onAuthStateChanged
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -31,18 +30,15 @@ import {
   Zap,
   ArrowRight,
   Ghost,
-  MessageSquare
+  MessageSquare,
+  XCircle
 } from 'lucide-react';
 
-// --- CONFIGURATION FIREBASE (VERSION VERCEL / LOCAL UNIQUEMENT) ---
-// Cette configuration va chercher tes variables dans le fichier .env.local
-// ou dans les réglages "Environment Variables" de Vercel.
-
+// --- CONFIGURATION FIREBASE ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
@@ -52,35 +48,19 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Nom de l'application pour Firestore (Tu peux le changer si tu veux reset la base)
-const appId = 'gartic-party-exquisite-v1'; 
+// On change l'ID pour repartir sur une base propre sans Storage
+const appId = 'gartic-party-no-storage-v1'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
   <style>{`
-    @keyframes float {
-      0%, 100% { transform: translateY(0px); }
-      50% { transform: translateY(-10px); }
-    }
-    @keyframes wobble {
-      0%, 100% { transform: rotate(-2deg); }
-      50% { transform: rotate(2deg); }
-    }
-    @keyframes popIn {
-      0% { transform: scale(0); opacity: 0; }
-      80% { transform: scale(1.1); opacity: 1; }
-      100% { transform: scale(1); opacity: 1; }
-    }
+    @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
+    @keyframes wobble { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+    @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 80% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
     .animate-float { animation: float 3s ease-in-out infinite; }
     .animate-wobble { animation: wobble 2s ease-in-out infinite; }
     .animate-pop { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-    
-    .bg-pattern {
-      background-color: #7c3aed;
-      background-image: radial-gradient(#a78bfa 2px, transparent 2px);
-      background-size: 30px 30px;
-    }
-    
+    .bg-pattern { background-color: #7c3aed; background-image: radial-gradient(#a78bfa 2px, transparent 2px); background-size: 30px 30px; }
     .shadow-hard { box-shadow: 4px 4px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-lg { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-sm { box-shadow: 2px 2px 0px 0px rgba(0,0,0,1); }
@@ -172,13 +152,26 @@ const FunCard = ({ children, className = '', title }: any) => (
   </div>
 );
 
-const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, color = 'bg-gray-400' }: any) => (
+// BADGE JOUEUR AVEC BOUTON KICK
+const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-gray-400', onKick, canKick }: any) => (
   <div className={`
-    relative flex flex-col items-center p-3 rounded-2xl border-4 border-black bg-white transition-all
+    relative flex flex-col items-center p-3 rounded-2xl border-4 border-black bg-white transition-all group
     ${isReady ? 'shadow-hard bg-green-50 -translate-y-1' : 'shadow-sm opacity-90'}
     ${hasVoted ? 'ring-4 ring-yellow-400' : ''}
   `}>
     {isHost && <Crown size={24} className="absolute -top-4 -right-4 text-yellow-500 fill-yellow-400 rotate-12 drop-shadow-md animate-bounce" />}
+    
+    {/* BOUTON KICK : Visible seulement si on peut kicker et que ce n'est pas nous-même */}
+    {canKick && !isMe && (
+      <button 
+        onClick={() => onKick(uid, name)}
+        className="absolute -top-2 -left-2 bg-red-500 text-white p-1 rounded-full border-2 border-black hover:scale-110 transition-transform z-10 shadow-sm opacity-0 group-hover:opacity-100"
+        title="Éjecter le joueur"
+      >
+        <XCircle size={16} strokeWidth={3} />
+      </button>
+    )}
+
     <div className={`w-16 h-16 rounded-full border-4 border-black flex items-center justify-center text-2xl font-black text-white mb-2 ${color} shadow-inner`}>
       {name.charAt(0).toUpperCase()}
     </div>
@@ -238,7 +231,8 @@ const DrawingCanvas = ({
 
   const saveState = () => {
     const canvas = canvasRef.current;
-    if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL()]);
+    // Qualité réduite à 0.4 pour économiser de la place en BDD
+    if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.4)]);
   }
 
   const getCoordinates = (event: React.MouseEvent | React.TouchEvent) => {
@@ -285,7 +279,8 @@ const DrawingCanvas = ({
     if (isReadOnly) return;
     setIsDrawing(false);
     const canvas = canvasRef.current;
-    if (canvas) onSave(canvas.toDataURL('image/jpeg', 0.6));
+    // ⚠️ COMPRESSION FORTE (0.35) POUR EVITER DE PAYER STORAGE
+    if (canvas) onSave(canvas.toDataURL('image/jpeg', 0.35));
   };
 
   const clearCanvas = () => {
@@ -295,7 +290,7 @@ const DrawingCanvas = ({
       saveState();
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      onSave(canvas.toDataURL('image/jpeg', 0.6));
+      onSave(canvas.toDataURL('image/jpeg', 0.35));
     }
   };
 
@@ -311,7 +306,7 @@ const DrawingCanvas = ({
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0);
-        onSave(canvas.toDataURL('image/jpeg', 0.6));
+        onSave(canvas.toDataURL('image/jpeg', 0.35));
       };
       img.src = lastState;
     }
@@ -333,8 +328,8 @@ const DrawingCanvas = ({
 
             <canvas
                 ref={canvasRef}
-                width={800}
-                height={600}
+                width={600} // Réduit de 800 à 600 pour économiser des octets
+                height={450}
                 className={`w-full h-full ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`}
                 onMouseDown={startDrawing}
                 onMouseMove={draw}
@@ -400,11 +395,9 @@ export default function App() {
 
   // AUTHENTIFICATION
   useEffect(() => {
-    // On utilise simplement l'auth anonyme de Firebase
-    // Pas besoin de tokens complexes pour le local/Vercel
     signInAnonymously(auth).catch((err) => {
         console.error("Erreur Auth:", err);
-        alert("Erreur de connexion Firebase. Vérifiez vos clés API !");
+        alert("Erreur de connexion Firebase.");
     });
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -419,12 +412,23 @@ export default function App() {
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
     return onSnapshot(roomRef, (snap) => {
       if (snap.exists()) {
-          setCurrentRoom(snap.data() as RoomData);
-          if (snap.data().mode) setSelectedMode(snap.data().mode);
+          const data = snap.data() as RoomData;
+          
+          // Check KICK
+          const amIStillIn = data.players.some(p => p.uid === myId);
+          if (!amIStillIn && data.phase !== 'RESULTS') {
+            alert("Tu as été éjecté de la partie !");
+            setCurrentRoom(null);
+            setRoomCode('');
+            return;
+          }
+
+          setCurrentRoom(data);
+          if (data.mode) setSelectedMode(data.mode);
       }
       else setCurrentRoom(null); 
     });
-  }, [user, roomCode]);
+  }, [user, roomCode, myId]);
 
   const createRoom = async () => {
     if (!playerName.trim() || !user || !myId) return;
@@ -469,7 +473,6 @@ export default function App() {
         if (snap.exists()) {
             const data = snap.data() as RoomData;
             
-            // On autorise le rejoindre uniquement si LOBBY
             if (data.phase !== 'LOBBY') {
                 alert("Trop tard, la partie a commencé !");
                 setLoading(false);
@@ -481,7 +484,6 @@ export default function App() {
             const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
             
             if (existingIndex >= 0) {
-                // Si le joueur existe déjà (reconnexion), on met à jour son nom
                 updatedPlayers[existingIndex] = { 
                     ...updatedPlayers[existingIndex], 
                     name: playerName, 
@@ -489,7 +491,6 @@ export default function App() {
                     hasVoted: false 
                 };
             } else {
-                // Sinon on l'ajoute
                 updatedPlayers.push({ 
                     uid: myId, 
                     name: playerName, 
@@ -508,9 +509,26 @@ export default function App() {
         }
     } catch (error) {
         console.error("Erreur JOIN:", error);
-        alert("Oups, impossible de rejoindre. Vérifiez le code !");
+        alert("Oups, impossible de rejoindre.");
     }
     setLoading(false);
+  };
+
+  // FONCTION KICK
+  const kickPlayer = async (targetUid: string, targetName: string) => {
+    if (!currentRoom || !myId) return;
+    if (!confirm(`Voulez-vous vraiment éjecter ${targetName} ?`)) return;
+
+    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
+    const updatedPlayers = currentRoom.players.filter(p => p.uid !== targetUid);
+    
+    const updatedChains = { ...currentRoom.chains };
+    delete updatedChains[targetUid];
+
+    await updateDoc(roomRef, { 
+        players: updatedPlayers,
+        chains: updatedChains
+    });
   };
 
   const updateMode = async (mode: GameMode) => {
@@ -562,6 +580,13 @@ export default function App() {
         stepType = currentRoom.round % 2 === 0 ? 'TEXT' : 'DRAWING';
     } 
 
+    // VÉRIFICATION DE SÉCURITÉ POUR EVITER LE CRASH FIREBASE (1MB Limit)
+    if (stepType === 'DRAWING' && inputContent.length > 900000) {
+        alert("Ton dessin est trop complexe pour la version gratuite ! Essaie de faire moins de traits.");
+        setIsReady(false);
+        return;
+    }
+
     const step: GameStep = {
       type: stepType,
       authorId: myId,
@@ -571,10 +596,18 @@ export default function App() {
     };
 
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-    await updateDoc(roomRef, {
-       [`chains.${ownerId}.steps`]: arrayUnion(step),
-       players: currentRoom.players.map(p => p.uid === myId ? { ...p, isReady: true } : p)
-    });
+    
+    try {
+        await updateDoc(roomRef, {
+           [`chains.${ownerId}.steps`]: arrayUnion(step),
+           players: currentRoom.players.map(p => p.uid === myId ? { ...p, isReady: true } : p)
+        });
+    } catch (err) {
+        console.error(err);
+        alert("Erreur de sauvegarde : Le dessin est peut-être trop gros !");
+        setIsReady(false);
+    }
+
     setInputContent('');
   };
 
@@ -725,7 +758,16 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                      {currentRoom.players.map((p) => <PlayerBadge key={p.uid} {...p} isMe={p.uid === myId} color={p.avatarColor || 'bg-purple-400'} />)}
+                      {currentRoom.players.map((p) => (
+                        <PlayerBadge 
+                            key={p.uid} 
+                            {...p} 
+                            isMe={p.uid === myId} 
+                            color={p.avatarColor || 'bg-purple-400'} 
+                            canKick={me?.isHost}
+                            onKick={kickPlayer}
+                        />
+                      ))}
                       {[...Array(Math.max(0, 8 - currentRoom.players.length))].map((_, i) => <div key={i} className="border-4 border-dashed border-black/20 rounded-2xl aspect-square flex items-center justify-center"><div className="w-12 h-12 rounded-full bg-black/10"></div></div>)}
                   </div>
               </div>
