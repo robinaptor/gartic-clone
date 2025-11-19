@@ -34,14 +34,26 @@ import {
   MessageSquare
 } from 'lucide-react';
 
-// --- CONFIGURATION FIREBASE ---
-// Configuration automatique pour la preview
-const firebaseConfig = JSON.parse(__firebase_config);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// --- CONFIGURATION FIREBASE (VERSION VERCEL / LOCAL UNIQUEMENT) ---
+// Cette configuration va chercher tes variables dans le fichier .env.local
+// ou dans les réglages "Environment Variables" de Vercel.
 
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
+
+// Initialisation
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// Nom de l'application pour Firestore (Tu peux le changer si tu veux reset la base)
+const appId = 'gartic-party-exquisite-v1'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
@@ -312,7 +324,6 @@ const DrawingCanvas = ({
             {/* GUIDE POUR CADAVRE EXQUIS */}
             {guideImage && (
                 <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
-                    {/* On affiche l'image précédente, mais coupée pour ne montrer que le bas */}
                     <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
                          <img src={guideImage} className="absolute bottom-0 w-full h-[666%] object-cover object-bottom opacity-70" alt="Guide" />
                          <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1">RACCORDE ICI</div>
@@ -387,18 +398,22 @@ export default function App() {
   });
   const myId = user ? `${user.uid}_${tabId}` : null;
 
+  // AUTHENTIFICATION
   useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
-    onAuthStateChanged(auth, setUser);
+    // On utilise simplement l'auth anonyme de Firebase
+    // Pas besoin de tokens complexes pour le local/Vercel
+    signInAnonymously(auth).catch((err) => {
+        console.error("Erreur Auth:", err);
+        alert("Erreur de connexion Firebase. Vérifiez vos clés API !");
+    });
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+        setUser(u);
+    });
+    return () => unsubscribe();
   }, []);
 
+  // ROOM LISTENER
   useEffect(() => {
     if (!user || !roomCode) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
@@ -453,27 +468,47 @@ export default function App() {
         const snap = await getDoc(roomRef);
         if (snap.exists()) {
             const data = snap.data() as RoomData;
+            
+            // On autorise le rejoindre uniquement si LOBBY
             if (data.phase !== 'LOBBY') {
                 alert("Trop tard, la partie a commencé !");
                 setLoading(false);
                 return;
             }
+            
             let updatedPlayers = [...data.players];
             const existingIndex = updatedPlayers.findIndex(p => p.uid === myId);
             const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+            
             if (existingIndex >= 0) {
-                updatedPlayers[existingIndex] = { ...updatedPlayers[existingIndex], name: playerName, isReady: false, hasVoted: false };
+                // Si le joueur existe déjà (reconnexion), on met à jour son nom
+                updatedPlayers[existingIndex] = { 
+                    ...updatedPlayers[existingIndex], 
+                    name: playerName, 
+                    isReady: false, 
+                    hasVoted: false 
+                };
             } else {
-                updatedPlayers.push({ uid: myId, name: playerName, isHost: false, isReady: false, hasVoted: false, score: 0, avatarColor: randomColor });
+                // Sinon on l'ajoute
+                updatedPlayers.push({ 
+                    uid: myId, 
+                    name: playerName, 
+                    isHost: false, 
+                    isReady: false, 
+                    hasVoted: false, 
+                    score: 0, 
+                    avatarColor: randomColor 
+                });
             }
+            
             await updateDoc(roomRef, { players: updatedPlayers });
             setRoomCode(code); 
         } else {
             alert("Code invalide !");
         }
     } catch (error) {
-        console.error(error);
-        alert("Oups, une erreur est survenue.");
+        console.error("Erreur JOIN:", error);
+        alert("Oups, impossible de rejoindre. Vérifiez le code !");
     }
     setLoading(false);
   };
