@@ -47,7 +47,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const appId = 'gartic-party-mobile-v1'; 
+// IDENTIFIANT UNIQUE POUR QUE TOUT LE MONDE SOIT AU MÊME ENDROIT
+const appId = 'gartic-final-prod'; 
 
 // --- STYLES & ANIMATIONS ---
 const GlobalStyles = () => (
@@ -62,9 +63,9 @@ const GlobalStyles = () => (
     .shadow-hard { box-shadow: 4px 4px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-lg { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-sm { box-shadow: 2px 2px 0px 0px rgba(0,0,0,1); }
-    
-    /* Empecher le scroll quand on dessine sur mobile */
     .touch-none { touch-action: none; }
+    /* Empêche le scroll horizontal sur mobile */
+    html, body { overflow-x: hidden; width: 100%; }
   `}</style>
 );
 
@@ -143,7 +144,7 @@ const FunButton = ({ onClick, disabled, children, color = 'yellow', className = 
 };
 
 const FunCard = ({ children, className = '', title }: any) => (
-  <div className={`bg-white border-4 border-black rounded-3xl shadow-hard p-4 md:p-6 ${className}`}>
+  <div className={`bg-white border-4 border-black rounded-3xl shadow-hard p-4 md:p-6 w-full ${className}`}>
     {title && (
       <div className="bg-black text-white inline-block px-3 py-1 md:px-4 md:py-1 rounded-full font-bold uppercase tracking-widest mb-4 transform -rotate-2 border-2 border-white shadow-sm text-sm md:text-base">
         {title}
@@ -191,7 +192,6 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
   </div>
 );
 
-// --- COMPOSANT DESSIN ADAPTATIF ---
 const DrawingCanvas = ({ 
     initialImage, 
     onSave, 
@@ -205,24 +205,18 @@ const DrawingCanvas = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  
   const [color, setColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isEraser, setIsEraser] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
-  
-  // Dimensions adaptatives
   const [dimensions, setDimensions] = useState({ width: 600, height: 450 });
 
-  // Calcul de la taille au chargement
   useLayoutEffect(() => {
       const updateSize = () => {
           if (containerRef.current) {
              const width = containerRef.current.offsetWidth;
-             // Sur mobile on prend la largeur, sur desktop on limite
              const finalWidth = Math.min(width, 800); 
-             // Ratio 4:3
              setDimensions({ width: finalWidth, height: finalWidth * 0.75 });
           }
       };
@@ -237,7 +231,6 @@ const DrawingCanvas = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    // On remplit de blanc seulement si c'est vierge
     if (history.length === 0 && !initialImage) {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -277,9 +270,7 @@ const DrawingCanvas = ({
 
   const startDrawing = (e: any) => {
     if (isReadOnly) return;
-    // Empêche le scroll sur mobile
     if (e.cancelable) e.preventDefault();
-    
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
@@ -293,7 +284,7 @@ const DrawingCanvas = ({
 
   const draw = (e: any) => {
     if (!isDrawing || isReadOnly) return;
-    if (e.cancelable) e.preventDefault(); // Empêche le scroll
+    if (e.cancelable) e.preventDefault();
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
@@ -340,10 +331,7 @@ const DrawingCanvas = ({
 
   return (
     <div className="flex flex-col gap-4 items-center w-full max-w-5xl mx-auto">
-        
-        {/* CANVAS CONTAINER */}
         <div ref={containerRef} className="relative w-full bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group" style={{ height: dimensions.height }}>
-            
             {guideImage && (
                 <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
                     <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
@@ -374,12 +362,9 @@ const DrawingCanvas = ({
             )}
         </div>
 
-        {/* TOOLBAR - RESPONSIVE (Grille sur mobile, Flex sur Desktop) */}
         {!isReadOnly && (
             <div className="bg-white border-4 border-black rounded-2xl p-3 md:p-4 shadow-hard w-full">
                 <div className="flex flex-col md:flex-row gap-4 items-center justify-center">
-                    
-                    {/* Outils & Taille */}
                     <div className="flex w-full md:w-auto justify-between md:justify-start gap-4 items-center border-b-2 md:border-b-0 border-gray-200 pb-3 md:pb-0">
                         <div className="flex gap-2">
                             <button onClick={() => setIsEraser(false)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${!isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Pencil size={20} /></button>
@@ -392,10 +377,7 @@ const DrawingCanvas = ({
                             ))}
                         </div>
                     </div>
-
                     <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
-
-                    {/* Couleurs - Grille sur mobile */}
                     <div className="grid grid-cols-5 md:grid-cols-10 gap-3 w-full md:w-auto justify-items-center">
                         {DRAW_COLORS.map((c) => (
                             <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-8 h-8 md:w-8 md:h-8 rounded-full border-2 border-black transition-transform shadow-sm ${color === c && !isEraser ? 'ring-4 ring-yellow-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />
@@ -430,7 +412,6 @@ export default function App() {
   });
   const myId = user ? `${user.uid}_${tabId}` : null;
 
-  // AUTHENTIFICATION
   useEffect(() => {
     signInAnonymously(auth).catch((err) => {
         console.error("Erreur Auth:", err);
@@ -443,7 +424,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // ROOM LISTENER
   useEffect(() => {
     if (!user || !roomCode) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
@@ -649,21 +629,21 @@ export default function App() {
     return (
         <div className="min-h-screen bg-pattern flex items-center justify-center p-4 font-sans">
             <GlobalStyles />
-            <FunCard className="w-full max-w-md text-center border-black border-4 shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] transform rotate-1 hover:rotate-0 transition-transform duration-300">
-                <div className="mb-8 relative">
-                    <h1 className="text-4xl md:text-6xl font-black text-yellow-400 tracking-tighter uppercase drop-shadow-[4px_4px_0_rgba(0,0,0,1)] stroke-black" style={{WebkitTextStroke: '2px black'}}>Gartic Clone</h1>
-                    <div className="absolute -top-6 -right-6 animate-bounce"><Pencil size={32} className="text-purple-500 fill-purple-300 drop-shadow-md md:w-12 md:h-12" /></div>
+            <FunCard className="w-full max-w-md text-center border-black border-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] md:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] transform md:rotate-1 hover:rotate-0 transition-transform duration-300">
+                <div className="mb-6 md:mb-8 relative">
+                    <h1 className="text-4xl md:text-6xl font-black text-yellow-400 tracking-tighter uppercase drop-shadow-[3px_3px_0_rgba(0,0,0,1)] md:drop-shadow-[4px_4px_0_rgba(0,0,0,1)] stroke-black" style={{WebkitTextStroke: '2px black'}}>Gartic Clone</h1>
+                    <div className="absolute -top-4 -right-4 md:-top-6 md:-right-6 animate-bounce"><Pencil size={32} className="text-purple-500 fill-purple-300 drop-shadow-md md:w-12 md:h-12" /></div>
                 </div>
-                <div className="space-y-6">
+                <div className="space-y-4 md:space-y-6">
                     <div className="text-left space-y-2">
                         <label className="block text-lg font-black text-black uppercase tracking-wide">Ton Pseudo</label>
-                        <input type="text" value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-4 border-black font-bold text-xl focus:outline-none focus:shadow-hard transition-all bg-gray-50 placeholder-gray-400" placeholder="SuperArtiste..."/>
+                        <input type="text" value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-4 border-black font-bold text-lg md:text-xl focus:outline-none focus:shadow-hard transition-all bg-gray-50 placeholder-gray-400" placeholder="SuperArtiste..." maxLength={12}/>
                     </div>
-                    <div className="flex flex-col gap-4 pt-2">
-                        <FunButton onClick={createRoom} disabled={loading || !playerName} color="purple" icon={Palette}>Créer une Party</FunButton>
+                    <div className="flex flex-col gap-3 md:gap-4 pt-2">
+                        <FunButton onClick={createRoom} disabled={loading || !playerName} color="purple" icon={Palette} className="w-full">Créer une Party</FunButton>
                         <div className="flex items-center gap-4"><div className="h-1 flex-1 bg-black rounded-full"></div><span className="font-black text-gray-400">OU</span><div className="h-1 flex-1 bg-black rounded-full"></div></div>
                         <div className="flex gap-2">
-                            <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} className="flex-1 px-4 py-3 rounded-xl border-4 border-black font-mono text-center font-black text-xl uppercase tracking-widest focus:outline-none focus:shadow-hard" placeholder="CODE" maxLength={6}/>
+                            <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} className="flex-1 px-4 py-3 rounded-xl border-4 border-black font-mono text-center font-black text-xl uppercase tracking-widest focus:outline-none focus:shadow-hard min-w-0" placeholder="CODE" maxLength={6}/>
                             <FunButton onClick={joinRoom} disabled={loading || !playerName || !joinCode} color="green">GO</FunButton>
                         </div>
                     </div>
@@ -678,7 +658,7 @@ export default function App() {
       return (
           <div className="min-h-screen bg-pattern p-4 md:p-6 font-sans">
               <GlobalStyles />
-              <div className="max-w-5xl mx-auto space-y-8">
+              <div className="max-w-5xl mx-auto space-y-6 md:space-y-8">
                   <div className="bg-white border-4 border-black rounded-3xl p-4 md:p-6 shadow-hard-lg flex flex-col gap-6">
                       <div className="flex flex-col md:flex-row justify-between items-center gap-6 border-b-4 border-black pb-6">
                         <div className="text-center md:text-left">
