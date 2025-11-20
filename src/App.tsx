@@ -35,12 +35,19 @@ import {
   Camera,
   Upload,
   RefreshCw,
-  Box,
-  Grid3X3, // Nouvelle icône pour le Pixel Art
-  PaintBucket // Nouvelle icône pour le pot de peinture
+  Grid3X3, 
+  PaintBucket,
+  Volume2,
+  VolumeX,
+  Clock,
+  User,
+  Download
 } from 'lucide-react';
 
-// --- CONFIGURATION FIREBASE ---
+// ==========================================
+// 1. CONFIGURATION FIREBASE
+// ==========================================
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -53,18 +60,84 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const appId = 'gartic-final-omega-v6-ultra'; 
+// ID unique de l'application pour séparer les données dans Firestore
+const appId = 'gartic-final-omega-v7-ultimate'; 
 
-// --- STYLES & ANIMATIONS ---
+// ==========================================
+// 2. SYSTÈME AUDIO (HOOK)
+// ==========================================
+
+const useSound = () => {
+    const [muted, setMuted] = useState(false);
+    
+    // Synthétiseur simple utilisant l'API Web Audio
+    // Cela évite d'avoir à gérer des fichiers .mp3 externes
+    const playTone = (freq: number, type: 'sine'|'square'|'sawtooth'|'triangle', duration: number, vol: number = 0.1) => {
+        if (muted) return;
+        try {
+            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+            if (!AudioContext) return;
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+            
+            gain.gain.setValueAtTime(vol, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + duration);
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            
+            osc.start();
+            osc.stop(ctx.currentTime + duration);
+        } catch (e) {
+            console.error("Audio error", e);
+        }
+    };
+
+    const playPop = () => playTone(600, 'sine', 0.1, 0.1);
+    const playJoin = () => { 
+        playTone(400, 'sine', 0.1); 
+        setTimeout(() => playTone(600, 'sine', 0.1), 100); 
+    };
+    const playStart = () => { 
+        playTone(300, 'square', 0.1); 
+        setTimeout(() => playTone(400, 'square', 0.1), 150); 
+        setTimeout(() => playTone(500, 'square', 0.3), 300); 
+    };
+    const playTick = () => playTone(800, 'sawtooth', 0.05, 0.05);
+    const playWin = () => {
+        [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+            setTimeout(() => playTone(freq, 'triangle', 0.3, 0.2), i * 150);
+        });
+    };
+
+    return { muted, setMuted, playPop, playJoin, playStart, playTick, playWin };
+};
+
+// ==========================================
+// 3. STYLES GLOBAUX & UTILITAIRES
+// ==========================================
+
 const GlobalStyles = () => (
   <style>{`
     @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
     @keyframes wobble { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
     @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 80% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes pulse-red { 0%, 100% { background-color: #ef4444; } 50% { background-color: #991b1b; } }
+    
     .animate-float { animation: float 3s ease-in-out infinite; }
     .animate-wobble { animation: wobble 2s ease-in-out infinite; }
     .animate-pop { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-    .bg-pattern { background-color: #7c3aed; background-image: radial-gradient(#a78bfa 2px, transparent 2px); background-size: 30px 30px; }
+    
+    .bg-pattern { 
+        background-color: #7c3aed; 
+        background-image: radial-gradient(#a78bfa 2px, transparent 2px); 
+        background-size: 30px 30px; 
+    }
+    
     .shadow-hard { box-shadow: 4px 4px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-lg { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
     .shadow-hard-sm { box-shadow: 2px 2px 0px 0px rgba(0,0,0,1); }
@@ -84,11 +157,29 @@ const GlobalStyles = () => (
         user-select: none !important; 
         -webkit-user-select: none !important; 
     }
+
+    /* PIXEL ART RENDERING */
+    .image-pixelated {
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+    }
+    
+    /* HIDE SCROLLBAR */
+    .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+    }
+    .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
   `}</style>
 );
 
-// --- TYPES ---
-// Remplacement de '3D' par 'PIXEL'
+// ==========================================
+// 4. TYPES TYPESCRIPT
+// ==========================================
+
 type GameMode = 'CLASSIC' | 'EXQUISITE' | 'TRADITIONAL' | 'PIXEL';
 type Phase = 'LOBBY' | 'WRITE_START' | 'DRAW' | 'GUESS' | 'VOTE' | 'PODIUM' | 'RESULTS' | 'EXQUISITE_DRAW';
 
@@ -99,7 +190,8 @@ interface Player {
   isReady: boolean;
   hasVoted: boolean;
   score: number;
-  avatarColor: string; 
+  avatarColor: string;
+  avatarImage?: string; // Image Base64 de l'avatar
 }
 
 interface GameStep {
@@ -124,14 +216,22 @@ interface RoomData {
   chains: Record<string, GameChain>; 
   maxRounds: number;
   createdAt: number;
+  timerDuration: number; // 0 = infini
+  turnExpiresAt?: number; // Timestamp de fin du tour
 }
 
-// --- CONSTANTES ---
+// ==========================================
+// 5. CONSTANTES DE JEU
+// ==========================================
+
 const AVATAR_COLORS = ['bg-red-400', 'bg-orange-400', 'bg-yellow-400', 'bg-green-400', 'bg-blue-400', 'bg-purple-400', 'bg-pink-400', 'bg-teal-400'];
 const DRAW_COLORS = ['#000000', '#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ec4899', '#78350f'];
 const BRUSH_SIZES = [4, 8, 16, 32];
 
-// --- COMPOSANTS UI ---
+// ==========================================
+// 6. COMPOSANTS UI GÉNÉRIQUES
+// ==========================================
+
 const FunButton = ({ onClick, disabled, children, color = 'yellow', className = '', icon: Icon }: any) => {
   const colorClasses: any = {
     yellow: 'bg-yellow-400 hover:bg-yellow-300 border-yellow-900 text-black',
@@ -172,7 +272,7 @@ const FunCard = ({ children, className = '', title }: any) => (
   </div>
 );
 
-const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-gray-400', onKick, canKick }: any) => (
+const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-gray-400', avatarImage, onKick, canKick }: any) => (
   <div className={`
     relative flex flex-col items-center p-2 md:p-3 rounded-2xl border-4 border-black bg-white transition-all group
     ${isReady ? 'shadow-hard bg-green-50 -translate-y-1' : 'shadow-sm opacity-90'}
@@ -187,8 +287,12 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
         <XCircle size={14} strokeWidth={3} />
       </button>
     )}
-    <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full border-4 border-black flex items-center justify-center text-xl md:text-2xl font-black text-white mb-2 ${color} shadow-inner`}>
-      {name.charAt(0).toUpperCase()}
+    <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full border-4 border-black flex items-center justify-center text-xl md:text-2xl font-black text-white mb-2 ${color} shadow-inner overflow-hidden bg-white`}>
+      {avatarImage ? (
+        <img src={avatarImage} className="w-full h-full object-cover" alt="Avatar" />
+      ) : (
+        name.charAt(0).toUpperCase()
+      )}
     </div>
     <div className="text-center w-full">
       <div className="font-bold text-black truncate w-full text-xs md:text-base leading-tight">{name}</div>
@@ -199,7 +303,118 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
   </div>
 );
 
-// --- NOUVEAU COMPOSANT PIXEL ART ---
+const TimerBar = ({ expiresAt, duration, onExpire }: { expiresAt?: number, duration: number, onExpire?: () => void }) => {
+    const [timeLeft, setTimeLeft] = useState(duration);
+    const [progress, setProgress] = useState(100);
+    const lastTick = useRef(Math.ceil(duration));
+
+    // Hook pour les sons (on le récupère ici pour le tic tac)
+    const { playTick } = useSound();
+
+    useEffect(() => {
+        if (!expiresAt || duration <= 0) return;
+        const interval = setInterval(() => {
+            const now = Date.now();
+            const diff = Math.ceil((expiresAt - now) / 1000);
+            const p = Math.max(0, ((expiresAt - now) / (duration * 1000)) * 100);
+            
+            setTimeLeft(diff);
+            setProgress(p);
+
+            // Son de tic-tac pour les 10 dernières secondes
+            if (diff <= 10 && diff > 0 && diff < lastTick.current) {
+                playTick();
+                lastTick.current = diff;
+            }
+
+            if (now >= expiresAt) {
+                clearInterval(interval);
+                if (onExpire) onExpire();
+            }
+        }, 100);
+        return () => clearInterval(interval);
+    }, [expiresAt, duration]);
+
+    if (!expiresAt || duration <= 0) return null;
+
+    return (
+        <div className="fixed top-0 left-0 w-full h-2 bg-gray-200 z-50">
+            <div 
+                className={`h-full transition-all duration-100 ease-linear ${timeLeft <= 10 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}
+                style={{ width: `${progress}%` }}
+            />
+            <div className={`absolute top-4 right-4 font-black text-xl bg-black text-white px-3 py-1 rounded-lg border-2 border-white shadow-md ${timeLeft <= 10 ? 'text-red-500 animate-bounce' : ''}`}>
+                {Math.max(0, timeLeft)}s
+            </div>
+        </div>
+    );
+};
+
+// ==========================================
+// 7. ÉDITEURS (AVATAR, DESSIN, PIXEL)
+// ==========================================
+
+// --- AVATAR EDITOR ---
+const AvatarEditor = ({ onSave }: { onSave: (data: string) => void }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if(canvas) {
+            const ctx = canvas.getContext('2d');
+            if(ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0,0,100,100);
+            }
+        }
+    }, []);
+
+    const draw = (e: any) => {
+        const canvas = canvasRef.current;
+        if(!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+        const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+        const ctx = canvas.getContext('2d');
+        if(ctx) {
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    };
+
+    const clear = () => {
+        const canvas = canvasRef.current;
+        if(canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx?.clearRect(0,0,100,100);
+            ctx!.fillStyle='#ffffff'; ctx!.fillRect(0,0,100,100);
+            onSave('');
+        }
+    }
+
+    return (
+        <div className="flex flex-col items-center gap-2">
+            <p className="font-bold text-sm uppercase text-purple-600">Dessine ta tête !</p>
+            <div className="relative border-4 border-black rounded-xl overflow-hidden shadow-sm w-[100px] h-[100px]">
+                <canvas 
+                    ref={canvasRef} 
+                    width={100} 
+                    height={100} 
+                    className="cursor-crosshair touch-none bg-white"
+                    onPointerMove={(e) => { if(e.buttons === 1) draw(e); }}
+                    onPointerDown={(e) => draw(e)}
+                    onPointerUp={() => onSave(canvasRef.current?.toDataURL() || '')}
+                    onTouchMove={(e) => draw(e)} // Support mobile explicite
+                />
+                <button onClick={clear} className="absolute bottom-1 right-1 bg-gray-200 p-1 rounded-md hover:bg-red-200"><Trash2 size={12}/></button>
+            </div>
+        </div>
+    );
+}
+
+// --- PIXEL ART EDITOR ---
 const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
   const GRID_WIDTH = 32;
   const GRID_HEIGHT = 24;
@@ -212,7 +427,6 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
 
-  // Initialiser avec du blanc
   useEffect(() => {
       drawCanvas();
   }, [pixels, showGrid]);
@@ -262,7 +476,6 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
       if (!canvas) return;
       
       const rect = canvas.getBoundingClientRect();
-      // Support tactile et souris
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
@@ -305,11 +518,10 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
   const handleExport = () => {
       // Créer un canvas temporaire haute résolution pour l'export
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = 640; // Largeur finale
-      tempCanvas.height = 480; // Hauteur finale
+      tempCanvas.width = 640; 
+      tempCanvas.height = 480;
       const ctx = tempCanvas.getContext('2d');
       if (ctx) {
-          // IMPORTANT: Désactiver le lissage pour avoir un effet pixel art net
           ctx.imageSmoothingEnabled = false; 
           
           const cellW = tempCanvas.width / GRID_WIDTH;
@@ -321,7 +533,6 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
           pixels.forEach((row, y) => {
               row.forEach((col, x) => {
                   ctx.fillStyle = col;
-                  // +1 pour éviter les micro-lignes blanches
                   ctx.fillRect(x * cellW, y * cellH, cellW + 1, cellH + 1); 
               });
           });
@@ -336,7 +547,7 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
             ref={canvasRef}
             width={640}
             height={480}
-            className="w-full h-full touch-none"
+            className="w-full h-full touch-none image-pixelated"
             onPointerDown={(e) => {
                 e.preventDefault();
                 isDrawing.current = true;
@@ -371,6 +582,201 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
        </div>
     </div>
   );
+};
+
+// --- COMPOSANT DESSIN STANDARD ---
+// --- COMPOSANT DESSIN ROBUSTE (CORRIGÉ UI) ---
+const DrawingCanvas = ({ 
+  initialImage, 
+  onSave, 
+  isReadOnly = false,
+  guideImage = null
+}: { 
+  initialImage?: string | null, 
+  onSave: (data: string) => void, 
+  isReadOnly?: boolean,
+  guideImage?: string | null
+}) => {
+const canvasRef = useRef<HTMLCanvasElement>(null);
+const containerRef = useRef<HTMLDivElement>(null);
+const [color, setColor] = useState('#000000');
+const [brushSize, setBrushSize] = useState(8);
+const [isEraser, setIsEraser] = useState(false);
+const [history, setHistory] = useState<string[]>([]);
+
+// On garde une résolution interne fixe pour la qualité du dessin
+const internalWidth = 800;
+const internalHeight = 600;
+
+const state = useRef({ isDrawing: false, lastX: 0, lastY: 0 });
+
+// Initialisation du canvas
+useEffect(() => {
+  const canvas = canvasRef.current; 
+  const ctx = canvas?.getContext('2d');
+  if (canvas && ctx) {
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      // Fond blanc par défaut
+      if (history.length === 0 && !initialImage) { 
+          ctx.fillStyle = '#ffffff'; 
+          ctx.fillRect(0, 0, canvas.width, canvas.height); 
+      }
+      if (initialImage) { 
+          const img = new Image(); 
+          img.onload = () => ctx.drawImage(img, 0, 0, internalWidth, internalHeight); 
+          img.src = initialImage; 
+      }
+  }
+}, [initialImage]);
+
+const saveState = () => { 
+    const canvas = canvasRef.current; 
+    if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.5)]); 
+};
+
+const getCoords = (e: PointerEvent, canvas: HTMLCanvasElement) => {
+    const rect = canvas.getBoundingClientRect();
+    // Mapping précis des coordonnées souris -> résolution canvas
+    return { 
+        x: (e.clientX - rect.left) * (canvas.width / rect.width), 
+        y: (e.clientY - rect.top) * (canvas.height / rect.height) 
+    };
+};
+
+useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || isReadOnly) return;
+
+    const handlePointerDown = (e: PointerEvent) => {
+        e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+        saveState();
+        state.current.isDrawing = true;
+        const { x, y } = getCoords(e, canvas);
+        state.current.lastX = x; state.current.lastY = y;
+        const ctx = canvas.getContext('2d');
+        if (ctx) { 
+            ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y); 
+            ctx.strokeStyle = isEraser ? '#ffffff' : color; 
+            ctx.lineWidth = brushSize; ctx.stroke(); 
+        }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+        e.preventDefault(); 
+        if (!state.current.isDrawing) return;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            const { x, y } = getCoords(e, canvas);
+            ctx.beginPath(); ctx.moveTo(state.current.lastX, state.current.lastY); ctx.lineTo(x, y); 
+            ctx.strokeStyle = isEraser ? '#ffffff' : color; 
+            ctx.lineWidth = brushSize; ctx.stroke();
+            state.current.lastX = x; state.current.lastY = y;
+        }
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+        e.preventDefault();
+        if (state.current.isDrawing) {
+            state.current.isDrawing = false;
+            canvas.releasePointerCapture(e.pointerId);
+            onSave(canvas.toDataURL('image/jpeg', 0.4));
+        }
+    };
+
+    canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
+    canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
+    canvas.addEventListener('pointerup', handlePointerUp);
+    canvas.addEventListener('pointercancel', handlePointerUp);
+    canvas.addEventListener('pointerleave', handlePointerUp);
+
+    return () => {
+        canvas.removeEventListener('pointerdown', handlePointerDown);
+        canvas.removeEventListener('pointermove', handlePointerMove);
+        canvas.removeEventListener('pointerup', handlePointerUp);
+        canvas.removeEventListener('pointercancel', handlePointerUp);
+        canvas.removeEventListener('pointerleave', handlePointerUp);
+    };
+}, [isReadOnly, color, brushSize, isEraser]);
+
+const undo = () => {
+  if (history.length === 0) return;
+  const lastState = history[history.length - 1];
+  setHistory(prev => prev.slice(0, -1));
+  const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
+  if (canvas && ctx && lastState) { 
+      const img = new Image(); 
+      img.onload = () => { 
+          ctx.fillStyle = '#ffffff'; 
+          ctx.fillRect(0, 0, canvas.width, canvas.height); 
+          ctx.drawImage(img, 0, 0); 
+          onSave(canvas.toDataURL('image/jpeg', 0.4)); 
+      }; 
+      img.src = lastState; 
+  }
+};
+
+const clearCanvas = () => {
+  const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
+  if(canvas && ctx) { 
+      saveState(); 
+      ctx.fillStyle = '#ffffff'; 
+      ctx.fillRect(0,0,canvas.width, canvas.height); 
+      onSave(canvas.toDataURL('image/jpeg', 0.4)); 
+  }
+};
+
+return (
+  <div className="flex flex-col h-full w-full max-w-5xl mx-auto items-center justify-center gap-2 md:gap-4">
+      {/* ZONE DE DESSIN RESPONSIVE */}
+      <div 
+          ref={containerRef} 
+          className="relative w-full max-w-full max-h-full aspect-[4/3] bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group shrink-1 min-h-0"
+      >
+          {guideImage && (
+              <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
+                  <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
+                       <img src={guideImage} className="absolute bottom-0 w-full h-[666%] object-cover object-bottom opacity-70" alt="Guide" />
+                       <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1">RACCORDE ICI</div>
+                  </div>
+              </div>
+          )}
+          <canvas 
+              ref={canvasRef} 
+              width={internalWidth} 
+              height={internalHeight} 
+              className={`w-full h-full touch-none select-none ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`} 
+          />
+          {!isReadOnly && (
+              <div className="absolute top-2 left-2 md:top-4 md:left-4 flex gap-2 z-20">
+                  <button onClick={undo} disabled={history.length === 0} className="bg-white border-2 border-black p-2 rounded-lg hover:bg-gray-100 shadow-hard-sm disabled:opacity-50"><Undo size={20}/></button>
+                  <button onClick={clearCanvas} className="bg-red-100 border-2 border-black p-2 rounded-lg hover:bg-red-200 shadow-hard-sm text-red-600"><Trash2 size={20}/></button>
+              </div>
+          )}
+      </div>
+
+      {/* BARRE D'OUTILS (NE BOUGE PLUS) */}
+      {!isReadOnly && (
+          <div className="bg-white border-4 border-black rounded-2xl p-2 shadow-hard w-full shrink-0">
+              <div className="flex flex-col md:flex-row gap-2 md:gap-4 items-center justify-center">
+                  <div className="flex w-full md:w-auto justify-between md:justify-start gap-4 items-center border-b-2 md:border-b-0 border-gray-200 pb-2 md:pb-0">
+                      <div className="flex gap-2">
+                          <button onClick={() => setIsEraser(false)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${!isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Pencil size={20} /></button>
+                          <button onClick={() => setIsEraser(true)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Eraser size={20} /></button>
+                      </div>
+                      <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
+                      <div className="flex gap-1 md:gap-2 items-center">
+                          {BRUSH_SIZES.map(size => <button key={size} onClick={() => setBrushSize(size)} className={`rounded-full bg-black transition-all ${brushSize === size ? 'ring-4 ring-yellow-400 scale-110' : 'opacity-30'}`} style={{ width: size/2 + 6, height: size/2 + 6 }} />)}
+                      </div>
+                  </div>
+                  <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
+                  <div className="flex flex-wrap justify-center gap-1 md:gap-2 w-full md:w-auto">
+                      {DRAW_COLORS.map((c) => <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 border-black transition-transform shadow-sm ${color === c && !isEraser ? 'ring-4 ring-yellow-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />)}
+                  </div>
+              </div>
+          </div>
+      )}
+  </div>
+);
 };
 
 // --- COMPOSANT CAMÉRA ---
@@ -462,166 +868,14 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
     );
 };
 
-// --- COMPOSANT DESSIN ROBUSTE ---
-const DrawingCanvas = ({ 
-    initialImage, 
-    onSave, 
-    isReadOnly = false,
-    guideImage = null
-}: { 
-    initialImage?: string | null, 
-    onSave: (data: string) => void, 
-    isReadOnly?: boolean,
-    guideImage?: string | null
-}) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [color, setColor] = useState('#000000');
-  const [brushSize, setBrushSize] = useState(8);
-  const [isEraser, setIsEraser] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
-  const [dimensions, setDimensions] = useState({ width: 600, height: 450 });
-
-  const state = useRef({ isDrawing: false, lastX: 0, lastY: 0 });
-
-  useLayoutEffect(() => {
-      const updateSize = () => {
-          if (containerRef.current) {
-             const width = containerRef.current.offsetWidth;
-             setDimensions({ width: width, height: width * 0.75 });
-          }
-      };
-      window.addEventListener('resize', updateSize); updateSize();
-      return () => window.removeEventListener('resize', updateSize);
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current; 
-    const ctx = canvas?.getContext('2d');
-    if (canvas && ctx) {
-        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        if (history.length === 0 && !initialImage) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
-        if (initialImage) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, dimensions.width, dimensions.height); img.src = initialImage; }
-    }
-  }, [initialImage, dimensions]);
-
-  const saveState = () => { const canvas = canvasRef.current; if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.5)]); };
-
-  const getCoords = (e: PointerEvent, canvas: HTMLCanvasElement) => {
-      const rect = canvas.getBoundingClientRect();
-      return { x: (e.clientX - rect.left) * (canvas.width / rect.width), y: (e.clientY - rect.top) * (canvas.height / rect.height) };
-  };
-
-  useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas || isReadOnly) return;
-
-      const handlePointerDown = (e: PointerEvent) => {
-          e.preventDefault(); canvas.setPointerCapture(e.pointerId);
-          saveState();
-          state.current.isDrawing = true;
-          const { x, y } = getCoords(e, canvas);
-          state.current.lastX = x; state.current.lastY = y;
-          const ctx = canvas.getContext('2d');
-          if (ctx) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y); ctx.strokeStyle = isEraser ? '#ffffff' : color; ctx.lineWidth = brushSize; ctx.stroke(); }
-      };
-
-      const handlePointerMove = (e: PointerEvent) => {
-          e.preventDefault(); 
-          if (!state.current.isDrawing) return;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-              const { x, y } = getCoords(e, canvas);
-              ctx.beginPath(); ctx.moveTo(state.current.lastX, state.current.lastY); ctx.lineTo(x, y); ctx.strokeStyle = isEraser ? '#ffffff' : color; ctx.lineWidth = brushSize; ctx.stroke();
-              state.current.lastX = x; state.current.lastY = y;
-          }
-      };
-
-      const handlePointerUp = (e: PointerEvent) => {
-          e.preventDefault();
-          if (state.current.isDrawing) {
-              state.current.isDrawing = false;
-              canvas.releasePointerCapture(e.pointerId);
-              onSave(canvas.toDataURL('image/jpeg', 0.4));
-          }
-      };
-
-      canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
-      canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
-      canvas.addEventListener('pointerup', handlePointerUp);
-      canvas.addEventListener('pointercancel', handlePointerUp);
-      canvas.addEventListener('pointerleave', handlePointerUp);
-
-      return () => {
-          canvas.removeEventListener('pointerdown', handlePointerDown);
-          canvas.removeEventListener('pointermove', handlePointerMove);
-          canvas.removeEventListener('pointerup', handlePointerUp);
-          canvas.removeEventListener('pointercancel', handlePointerUp);
-          canvas.removeEventListener('pointerleave', handlePointerUp);
-      };
-  }, [isReadOnly, color, brushSize, isEraser, dimensions]);
-
-  const undo = () => {
-    if (history.length === 0) return;
-    const lastState = history[history.length - 1];
-    setHistory(prev => prev.slice(0, -1));
-    const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-    if (canvas && ctx && lastState) { const img = new Image(); img.onload = () => { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(img, 0, 0); onSave(canvas.toDataURL('image/jpeg', 0.4)); }; img.src = lastState; }
-  };
-
-  const clearCanvas = () => {
-    const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-    if(canvas && ctx) { saveState(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width, canvas.height); onSave(canvas.toDataURL('image/jpeg', 0.4)); }
-  };
-
-  return (
-    <div className="flex flex-col gap-4 items-center w-full max-w-5xl mx-auto">
-        <div ref={containerRef} className="relative w-full bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group" style={{ height: dimensions.height, touchAction: 'none' }}>
-            {guideImage && (
-                <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
-                    <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
-                         <img src={guideImage} className="absolute bottom-0 w-full h-[666%] object-cover object-bottom opacity-70" alt="Guide" />
-                         <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1">RACCORDE ICI</div>
-                    </div>
-                </div>
-            )}
-            <canvas ref={canvasRef} width={dimensions.width} height={dimensions.height} style={{ touchAction: 'none', width: '100%', height: '100%' }} className={`block touch-none select-none ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`} />
-            {!isReadOnly && (
-                <div className="absolute top-2 left-2 md:top-4 md:left-4 flex gap-2 z-20">
-                    <button onClick={undo} disabled={history.length === 0} className="bg-white border-2 border-black p-2 rounded-lg hover:bg-gray-100 shadow-hard-sm disabled:opacity-50"><Undo size={20}/></button>
-                    <button onClick={clearCanvas} className="bg-red-100 border-2 border-black p-2 rounded-lg hover:bg-red-200 shadow-hard-sm text-red-600"><Trash2 size={20}/></button>
-                </div>
-            )}
-        </div>
-        {!isReadOnly && (
-            <div className="bg-white border-4 border-black rounded-2xl p-3 md:p-4 shadow-hard w-full">
-                <div className="flex flex-col md:flex-row gap-4 items-center justify-center">
-                    <div className="flex w-full md:w-auto justify-between md:justify-start gap-4 items-center border-b-2 md:border-b-0 border-gray-200 pb-3 md:pb-0">
-                        <div className="flex gap-2">
-                            <button onClick={() => setIsEraser(false)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${!isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Pencil size={20} /></button>
-                            <button onClick={() => setIsEraser(true)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Eraser size={20} /></button>
-                        </div>
-                        <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
-                        <div className="flex gap-2 items-center">
-                            {BRUSH_SIZES.map(size => <button key={size} onClick={() => setBrushSize(size)} className={`rounded-full bg-black transition-all ${brushSize === size ? 'ring-4 ring-yellow-400 scale-110' : 'opacity-30'}`} style={{ width: size/2 + 8, height: size/2 + 8 }} />)}
-                        </div>
-                    </div>
-                    <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
-                    <div className="grid grid-cols-5 md:grid-cols-10 gap-3 w-full md:w-auto justify-items-center">
-                        {DRAW_COLORS.map((c) => <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-8 h-8 md:w-8 md:h-8 rounded-full border-2 border-black transition-transform shadow-sm ${color === c && !isEraser ? 'ring-4 ring-yellow-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />)}
-                    </div>
-                </div>
-            </div>
-        )}
-    </div>
-  );
-};
-
-// --- MAIN APP ---
+// ==========================================
+// 8. COMPOSANT PRINCIPAL (APP)
+// ==========================================
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [playerName, setPlayerName] = useState('');
+  const [playerAvatar, setPlayerAvatar] = useState('');
   const [roomCode, setRoomCode] = useState(''); 
   const [joinCode, setJoinCode] = useState(''); 
   const [currentRoom, setCurrentRoom] = useState<RoomData | null>(null);
@@ -629,6 +883,10 @@ export default function App() {
   const [inputContent, setInputContent] = useState(''); 
   const [isReady, setIsReady] = useState(false);
   const [selectedMode, setSelectedMode] = useState<GameMode>('CLASSIC');
+  const [timerDuration, setTimerDuration] = useState(0);
+
+  // Hook Audio
+  const { muted, setMuted, playPop, playJoin, playStart, playTick, playWin } = useSound();
 
   const [tabId] = useState(() => {
       const existing = sessionStorage.getItem('gartic_tab_id');
@@ -639,11 +897,16 @@ export default function App() {
   });
   const myId = user ? `${user.uid}_${tabId}` : null;
 
+  // --- EFFETS DE BORD ---
+
   useEffect(() => {
     signInAnonymously(auth).catch((err) => { console.error("Erreur Auth:", err); alert("Erreur de connexion Firebase."); });
     const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); });
     return () => unsubscribe();
   }, []);
+
+  const prevPhase = useRef<Phase | null>(null);
+  const prevPlayerCount = useRef(0);
 
   useEffect(() => {
     if (!user || !roomCode) return;
@@ -652,6 +915,18 @@ export default function App() {
       if (snap.exists()) {
           const data = snap.data() as RoomData;
           const amIStillIn = data.players.some(p => p.uid === myId);
+          
+          // Gestion des Sons
+          if (data.phase !== prevPhase.current) {
+              if (data.phase !== 'LOBBY') playStart();
+              if (data.phase === 'PODIUM') playWin();
+              prevPhase.current = data.phase;
+          }
+          if (data.players.length > prevPlayerCount.current) {
+              playJoin();
+              prevPlayerCount.current = data.players.length;
+          }
+          
           if (!amIStillIn && data.phase !== 'RESULTS') {
             alert("Tu as été éjecté de la partie !"); setCurrentRoom(null); setRoomCode(''); return;
           }
@@ -661,6 +936,8 @@ export default function App() {
     });
   }, [user, roomCode, myId]);
 
+  // --- LOGIQUE DE JEU (ACTIONS) ---
+
   const createRoom = async () => {
     if (!playerName.trim() || !user || !myId) return;
     setLoading(true);
@@ -668,12 +945,32 @@ export default function App() {
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', code);
     const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
-    const newPlayer: Player = { uid: myId, name: playerName, isHost: true, isReady: false, hasVoted: false, score: 0, avatarColor: randomColor };
-    const newRoom: RoomData = { code, mode: 'CLASSIC', players: [newPlayer], phase: 'LOBBY', round: 0, chains: {}, maxRounds: 3, createdAt: Date.now() };
+    const newPlayer: Player = { 
+        uid: myId, 
+        name: playerName, 
+        isHost: true, 
+        isReady: false, 
+        hasVoted: false, 
+        score: 0, 
+        avatarColor: randomColor,
+        avatarImage: playerAvatar 
+    };
+    const newRoom: RoomData = { 
+        code, 
+        mode: 'CLASSIC', 
+        players: [newPlayer], 
+        phase: 'LOBBY', 
+        round: 0, 
+        chains: {}, 
+        maxRounds: 3, 
+        createdAt: Date.now(),
+        timerDuration: 0 
+    };
 
     await setDoc(roomRef, newRoom);
     setRoomCode(code);
     setLoading(false);
+    playPop();
   };
 
   const joinRoom = async () => {
@@ -689,28 +986,31 @@ export default function App() {
             let updatedPlayers = [...data.players];
             const existingIndex = updatedPlayers.findIndex(p => p.uid === myId);
             const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
-            if (existingIndex >= 0) { updatedPlayers[existingIndex] = { ...updatedPlayers[existingIndex], name: playerName, isReady: false, hasVoted: false }; } 
-            else { updatedPlayers.push({ uid: myId, name: playerName, isHost: false, isReady: false, hasVoted: false, score: 0, avatarColor: randomColor }); }
+            
+            const playerObj = { 
+                uid: myId, 
+                name: playerName, 
+                isHost: false, 
+                isReady: false, 
+                hasVoted: false, 
+                score: 0, 
+                avatarColor: randomColor,
+                avatarImage: playerAvatar
+            };
+
+            if (existingIndex >= 0) { updatedPlayers[existingIndex] = { ...updatedPlayers[existingIndex], name: playerName, avatarImage: playerAvatar }; } 
+            else { updatedPlayers.push(playerObj); }
             await updateDoc(roomRef, { players: updatedPlayers }); setRoomCode(code); 
+            playPop();
         } else { alert("Code invalide !"); }
     } catch (error) { console.error("Erreur JOIN:", error); alert("Oups, impossible de rejoindre."); }
     setLoading(false);
   };
 
-  const kickPlayer = async (targetUid: string, targetName: string) => {
-    if (!currentRoom || !myId) return;
-    if (!confirm(`Voulez-vous vraiment éjecter ${targetName} ?`)) return;
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-    const updatedPlayers = currentRoom.players.filter(p => p.uid !== targetUid);
-    const updatedChains = { ...currentRoom.chains }; delete updatedChains[targetUid];
-    await updateDoc(roomRef, { players: updatedPlayers, chains: updatedChains });
-  };
-
-  const updateMode = async (mode: GameMode) => {
+  const updateTimerSettings = async (duration: number) => {
       if (!currentRoom || !myId) return;
-      setSelectedMode(mode);
       const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-      await updateDoc(roomRef, { mode: mode });
+      await updateDoc(roomRef, { timerDuration: duration });
   }
 
   const startGame = async () => {
@@ -721,6 +1021,14 @@ export default function App() {
     const resetPlayers = currentRoom.players.map(p => ({...p, score: 0, hasVoted: false, isReady: false}));
     
     const updates: any = { chains: initialChains, players: resetPlayers, round: 0 };
+    
+    // Gestion Timer
+    if (currentRoom.timerDuration > 0) {
+        updates.turnExpiresAt = Date.now() + (currentRoom.timerDuration * 1000);
+    } else {
+        updates.turnExpiresAt = null;
+    }
+
     if (currentRoom.mode === 'EXQUISITE') { updates.phase = 'EXQUISITE_DRAW'; updates.maxRounds = 3; } 
     else { updates.phase = 'WRITE_START'; updates.maxRounds = currentRoom.players.length; }
     await updateDoc(roomRef, updates);
@@ -729,6 +1037,7 @@ export default function App() {
   const submitContent = async (contentOverride?: string) => {
     if (!currentRoom || !myId) return;
     setIsReady(true);
+    playPop();
     const myIndex = currentRoom.players.findIndex(p => p.uid === myId);
     const totalPlayers = currentRoom.players.length;
     const ownerIndex = (myIndex - currentRoom.round + (totalPlayers * 10)) % totalPlayers;
@@ -740,11 +1049,10 @@ export default function App() {
     }
 
     const finalContent = contentOverride || inputContent;
-    if (stepType === 'DRAWING' && finalContent.length > 900000) { alert("Ton image est trop lourde !"); setIsReady(false); return; }
-
-    const step: GameStep = { type: stepType, authorId: myId, authorName: currentRoom.players.find(p => p.uid === myId)?.name || 'Inconnu', content: finalContent, votes: 0 };
+    const step: GameStep = { type: stepType, authorId: myId, authorName: currentRoom.players.find(p => p.uid === myId)?.name || 'Inconnu', content: finalContent || (stepType === 'TEXT' ? '...' : ''), votes: 0 };
+    
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-    try { await updateDoc(roomRef, { [`chains.${ownerId}.steps`]: arrayUnion(step), players: currentRoom.players.map(p => p.uid === myId ? { ...p, isReady: true } : p) }); } catch (err) { console.error(err); alert("Erreur de sauvegarde !"); setIsReady(false); }
+    try { await updateDoc(roomRef, { [`chains.${ownerId}.steps`]: arrayUnion(step), players: currentRoom.players.map(p => p.uid === myId ? { ...p, isReady: true } : p) }); } catch (err) { console.error(err); }
     setInputContent('');
   };
 
@@ -752,31 +1060,46 @@ export default function App() {
     if (!currentRoom || !myId) return;
     const chain = currentRoom.chains[targetChainOwnerId];
     if (!chain) return;
+    playPop();
     const updatedSteps = [...chain.steps];
     if (updatedSteps[stepIndex]) updatedSteps[stepIndex].votes = (updatedSteps[stepIndex].votes || 0) + 1;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
     await updateDoc(roomRef, { [`chains.${targetChainOwnerId}.steps`]: updatedSteps, players: currentRoom.players.map(p => p.uid === myId ? { ...p, hasVoted: true } : p) });
   };
 
+  // AUTO-NEXT (Gestion par le Host)
   useEffect(() => {
     if (!currentRoom || !myId) return;
     const me = currentRoom.players.find(p => p.uid === myId);
     if (!me?.isHost) return; 
+    
     const allReady = currentRoom.players.every(p => p.isReady);
     const allVoted = currentRoom.players.every(p => p.hasVoted);
 
+    // Passage automatique Round suivant
     if (allReady && !['LOBBY', 'VOTE', 'PODIUM', 'RESULTS'].includes(currentRoom.phase)) {
+        const nextUpdates: any = {};
+        
         if (currentRoom.round + 1 >= currentRoom.maxRounds) {
-            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-            updateDoc(roomRef, { phase: 'VOTE', players: currentRoom.players.map(p => ({...p, isReady: false, hasVoted: false})) });
+            nextUpdates.phase = 'VOTE';
+            nextUpdates.players = currentRoom.players.map(p => ({...p, isReady: false, hasVoted: false}));
         } else {
             let nextPhase: Phase = (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === 'PIXEL') 
                 ? ((currentRoom.round + 1) % 2 === 0 ? 'GUESS' : 'DRAW') 
                 : 'EXQUISITE_DRAW';
-            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
-            setTimeout(() => { updateDoc(roomRef, { round: increment(1), phase: nextPhase, players: currentRoom.players.map(p => ({...p, isReady: false})) }); }, 1000);
+            nextUpdates.round = increment(1);
+            nextUpdates.phase = nextPhase;
+            nextUpdates.players = currentRoom.players.map(p => ({...p, isReady: false}));
+            
+            if (currentRoom.timerDuration > 0) {
+                nextUpdates.turnExpiresAt = Date.now() + (currentRoom.timerDuration * 1000) + 1500; 
+            }
         }
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
+        setTimeout(() => { updateDoc(roomRef, nextUpdates); }, 1000);
     }
+
+    // Passage automatique Podium
     if (currentRoom.phase === 'VOTE' && allVoted) {
         const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
         setTimeout(() => updateDoc(roomRef, { phase: 'PODIUM' }), 1500);
@@ -794,28 +1117,59 @@ export default function App() {
       return chain.steps[chain.steps.length - 1];
   };
 
+  // RESET / RESTART
+  const returnToLobby = async () => {
+    if (!currentRoom || !roomCode) return;
+    playPop();
+    const resetPlayers = currentRoom.players.map(p => ({
+        ...p,
+        score: 0,
+        isReady: false,
+        hasVoted: false
+    }));
+    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
+    await updateDoc(roomRef, {
+        phase: 'LOBBY',
+        round: 0,
+        chains: {},
+        players: resetPlayers
+    });
+  };
+
+  // ==========================================
+  // 9. RENDU PRINCIPAL
+  // ==========================================
+
   if (!user) return <div className="h-screen flex items-center justify-center bg-pattern"><Loader2 className="animate-spin text-white" size={48}/></div>;
 
+  // ECRAN ACCUEIL
   if (!currentRoom) {
     return (
-        <div className="min-h-screen bg-pattern flex items-center justify-center p-4 font-sans">
+        <div className="min-h-screen bg-pattern flex items-center justify-center p-4 font-sans relative">
             <GlobalStyles />
-            <FunCard className="w-full max-w-md text-center border-black border-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] md:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] transform md:rotate-1 hover:rotate-0 transition-transform duration-300">
-                <div className="mb-6 md:mb-8 relative">
-                    <h1 className="text-4xl md:text-6xl font-black text-yellow-400 tracking-tighter uppercase drop-shadow-[3px_3px_0_rgba(0,0,0,1)] md:drop-shadow-[4px_4px_0_rgba(0,0,0,1)] stroke-black" style={{WebkitTextStroke: '2px black'}}>Gartic Clone</h1>
-                    <div className="absolute -top-4 -right-4 md:-top-6 md:-right-6 animate-bounce"><Pencil size={32} className="text-purple-500 fill-purple-300 drop-shadow-md md:w-12 md:h-12" /></div>
+            <button onClick={() => setMuted(!muted)} className="absolute top-4 right-4 bg-white p-2 rounded-full border-2 border-black shadow-hard z-50">
+                {muted ? <VolumeX size={24}/> : <Volume2 size={24}/>}
+            </button>
+
+            <FunCard className="w-full max-w-md text-center border-black border-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transform md:rotate-1">
+                <div className="mb-4 relative">
+                    <h1 className="text-4xl md:text-6xl font-black text-yellow-400 tracking-tighter uppercase drop-shadow-md stroke-black" style={{WebkitTextStroke: '2px black'}}>Gartic Clone</h1>
                 </div>
-                <div className="space-y-4 md:space-y-6">
+                <div className="space-y-4">
                     <div className="text-left space-y-2">
                         <label className="block text-lg font-black text-black uppercase tracking-wide">Ton Pseudo</label>
-                        <input type="text" value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-4 border-black font-bold text-lg md:text-xl focus:outline-none focus:shadow-hard transition-all bg-gray-50 placeholder-gray-400" placeholder="SuperArtiste..." maxLength={12}/>
+                        <input type="text" value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-4 border-black font-bold text-lg focus:outline-none focus:shadow-hard bg-gray-50" placeholder="SuperArtiste..." maxLength={12}/>
+                        
+                        <div className="bg-gray-100 p-3 rounded-xl border-2 border-black flex justify-center">
+                             <AvatarEditor onSave={setPlayerAvatar} />
+                        </div>
                     </div>
-                    <div className="flex flex-col gap-3 md:gap-4 pt-2">
-                        <FunButton onClick={createRoom} disabled={loading || !playerName} color="purple" icon={Palette} className="w-full">Créer une Party</FunButton>
+                    <div className="flex flex-col gap-3 pt-2">
+                        <FunButton onClick={createRoom} disabled={loading || !playerName || !playerAvatar} color="purple" icon={Palette} className="w-full">Créer une Party</FunButton>
                         <div className="flex items-center gap-4"><div className="h-1 flex-1 bg-black rounded-full"></div><span className="font-black text-gray-400">OU</span><div className="h-1 flex-1 bg-black rounded-full"></div></div>
                         <div className="flex gap-2">
                             <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} className="flex-1 px-4 py-3 rounded-xl border-4 border-black font-mono text-center font-black text-xl uppercase tracking-widest focus:outline-none focus:shadow-hard min-w-0" placeholder="CODE" maxLength={6}/>
-                            <FunButton onClick={joinRoom} disabled={loading || !playerName || !joinCode} color="green">GO</FunButton>
+                            <FunButton onClick={joinRoom} disabled={loading || !playerName || !joinCode || !playerAvatar} color="green">GO</FunButton>
                         </div>
                     </div>
                 </div>
@@ -824,9 +1178,27 @@ export default function App() {
     );
   }
 
-  if (currentRoom.phase === 'LOBBY') {
-      const me = currentRoom.players.find(p => p.uid === myId);
-      return (
+  const me = currentRoom.players.find(p => p.uid === myId);
+  const showTimer = currentRoom.turnExpiresAt && !['LOBBY','VOTE','PODIUM','RESULTS'].includes(currentRoom.phase) && !isReady;
+
+  return (
+      <>
+        {/* TIMER BAR */}
+        {showTimer && (
+            <TimerBar 
+                expiresAt={currentRoom.turnExpiresAt} 
+                duration={currentRoom.timerDuration} 
+                onExpire={() => { if (!isReady) submitContent(); }}
+            />
+        )}
+
+        {/* MUTE BTN IN-GAME */}
+        <button onClick={() => setMuted(!muted)} className="fixed top-4 right-4 bg-white p-2 rounded-full border-2 border-black shadow-hard z-50 hover:scale-110 transition-transform">
+            {muted ? <VolumeX size={20}/> : <Volume2 size={20}/>}
+        </button>
+
+        {/* --- VIEW: LOBBY --- */}
+        {currentRoom.phase === 'LOBBY' && (
           <div className="min-h-screen bg-pattern p-4 md:p-6 font-sans">
               <GlobalStyles />
               <div className="max-w-5xl mx-auto space-y-6 md:space-y-8">
@@ -841,12 +1213,31 @@ export default function App() {
                         </div>
                         <div className="flex flex-col items-center gap-2 w-full md:w-auto">
                             <span className="font-black text-sm uppercase tracking-widest">Mode de Jeu</span>
-                            <div className="flex flex-wrap gap-2 bg-gray-100 p-1 rounded-xl border-2 border-black w-full md:w-auto justify-center">
-                                <button onClick={() => me?.isHost && updateMode('CLASSIC')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'CLASSIC' ? 'bg-white border-2 border-black shadow-hard-sm text-black' : 'text-gray-400'}`}><MessageSquare size={14}/> Classique</button>
-                                <button onClick={() => me?.isHost && updateMode('EXQUISITE')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'EXQUISITE' ? 'bg-purple-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Ghost size={14}/> Exquis</button>
-                                <button onClick={() => me?.isHost && updateMode('TRADITIONAL')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'TRADITIONAL' ? 'bg-blue-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Camera size={14}/> Papier</button>
-                                <button onClick={() => me?.isHost && updateMode('PIXEL')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'PIXEL' ? 'bg-orange-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Grid3X3 size={14}/> Pixel Art</button>
+                            <div className="flex flex-wrap gap-2 bg-gray-100 p-1 rounded-xl border-2 border-black w-full md:w-auto justify-center mb-2">
+                                <button onClick={() => me?.isHost && (playTick(), updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode), {mode:'CLASSIC'}))} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold flex items-center gap-2 text-xs ${currentRoom.mode === 'CLASSIC' ? 'bg-white border-2 border-black shadow-hard-sm' : 'text-gray-400'}`}><MessageSquare size={14}/> Classique</button>
+                                <button onClick={() => me?.isHost && (playTick(), updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode), {mode:'PIXEL'}))} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold flex items-center gap-2 text-xs ${currentRoom.mode === 'PIXEL' ? 'bg-orange-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Grid3X3 size={14}/> Pixel</button>
+                                <button onClick={() => me?.isHost && (playTick(), updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode), {mode:'EXQUISITE'}))} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold flex items-center gap-2 text-xs ${currentRoom.mode === 'EXQUISITE' ? 'bg-purple-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Ghost size={14}/> Exquis</button>
+                                <button onClick={() => me?.isHost && (playTick(), updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode), {mode:'TRADITIONAL'}))} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold flex items-center gap-2 text-xs ${currentRoom.mode === 'TRADITIONAL' ? 'bg-blue-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Camera size={14}/> Papier</button>
                             </div>
+                            
+                            {me?.isHost && (
+                                <div className="flex items-center gap-2 bg-yellow-100 p-2 rounded-xl border-2 border-black">
+                                    <Clock size={16}/>
+                                    <select 
+                                        value={currentRoom.timerDuration || 0} 
+                                        onChange={(e) => { playTick(); updateTimerSettings(Number(e.target.value)); }}
+                                        className="bg-transparent font-bold text-sm focus:outline-none"
+                                    >
+                                        <option value={0}>Temps illimité</option>
+                                        <option value={30}>30 secondes (Speed)</option>
+                                        <option value={60}>60 secondes (Normal)</option>
+                                        <option value={90}>90 secondes (Chill)</option>
+                                    </select>
+                                </div>
+                            )}
+                            {!me?.isHost && currentRoom.timerDuration > 0 && (
+                                <div className="text-xs font-bold bg-yellow-100 px-2 py-1 rounded border border-black">⏱️ {currentRoom.timerDuration}s par tour</div>
+                            )}
                         </div>
                       </div>
                       <div className="flex justify-center">
@@ -861,194 +1252,159 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-6">
                       {currentRoom.players.map((p) => (
-                        <PlayerBadge key={p.uid} {...p} isMe={p.uid === myId} color={p.avatarColor || 'bg-purple-400'} canKick={me?.isHost} onKick={kickPlayer} />
+                        <PlayerBadge key={p.uid} {...p} isMe={p.uid === myId} color={p.avatarColor || 'bg-purple-400'} avatarImage={p.avatarImage} canKick={me?.isHost} onKick={() => {}} />
                       ))}
                       {[...Array(Math.max(0, 8 - currentRoom.players.length))].map((_, i) => <div key={i} className="border-4 border-dashed border-black/20 rounded-2xl aspect-square flex items-center justify-center"><div className="w-12 h-12 rounded-full bg-black/10"></div></div>)}
                   </div>
               </div>
           </div>
-      );
-  }
+        )}
 
-  const me = currentRoom.players.find(p => p.uid === myId);
-  if (me?.isReady && !['RESULTS', 'VOTE', 'PODIUM'].includes(currentRoom.phase)) {
-      return (
-          <div className="min-h-screen bg-pattern flex flex-col items-center justify-center p-4 text-center space-y-8">
-              <GlobalStyles />
-              <FunCard className="animate-float flex flex-col items-center p-8 md:p-12">
-                  <Loader2 size={48} className="animate-spin text-purple-600 mb-6" />
-                  <h2 className="text-2xl md:text-4xl font-black uppercase mb-2">Terminé !</h2>
-                  <p className="text-gray-500 font-bold text-lg md:text-xl">On attend les artistes...</p>
-              </FunCard>
-              <div className="flex gap-3 bg-black/20 p-4 rounded-2xl backdrop-blur-sm">
-                  {currentRoom.players.map(p => <div key={p.uid} className={`w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-white transition-all duration-300 ${p.isReady ? 'bg-green-400 scale-125' : 'bg-gray-400'}`} />)}
-              </div>
-          </div>
-      );
-  }
-
-  if (currentRoom.phase === 'EXQUISITE_DRAW') {
-    const prevStep = getPreviousContent();
-    let instruction = "Dessine la TÊTE !";
-    let guideImage = null;
-    if (currentRoom.round === 1) { instruction = "Raccorde le CORPS !"; guideImage = prevStep?.content; } 
-    else if (currentRoom.round === 2) { instruction = "Dessine les JAMBES !"; guideImage = prevStep?.content; }
-
-    return (
-        <div className="min-h-screen bg-purple-600 flex flex-col font-sans">
-            <GlobalStyles />
-            <div className="bg-white border-b-4 border-black p-3 md:p-4 shadow-md z-10 flex justify-between items-center">
-                <div className="flex items-center gap-2 md:gap-4">
-                    <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm flex items-center gap-2"><Ghost size={14}/> Exquis</div>
-                    <h2 className="text-lg md:text-2xl font-black text-purple-600 truncate max-w-[150px] md:max-w-none">{instruction}</h2>
-                </div>
-                <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
+        {/* --- VIEW: WAITING --- */}
+        {me?.isReady && !['LOBBY','RESULTS', 'VOTE', 'PODIUM'].includes(currentRoom.phase) && (
+            <div className="min-h-screen bg-pattern flex flex-col items-center justify-center p-4 text-center space-y-8">
+                <GlobalStyles />
+                <FunCard className="animate-float flex flex-col items-center p-8 md:p-12">
+                    <Loader2 size={48} className="animate-spin text-purple-600 mb-6" />
+                    <h2 className="text-2xl md:text-4xl font-black uppercase mb-2">Terminé !</h2>
+                    <p className="text-gray-500 font-bold text-lg md:text-xl">On attend les escargots...</p>
+                </FunCard>
             </div>
-            <div className="flex-1 overflow-y-auto bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center">
-                 <DrawingCanvas onSave={(data) => setInputContent(data)} guideImage={guideImage} />
-            </div>
-        </div>
-    );
-  }
+        )}
 
-  if (currentRoom.phase === 'WRITE_START') {
-    return (
-        <div className="min-h-screen bg-yellow-400 flex items-center justify-center p-4 font-sans bg-pattern" style={{backgroundColor: '#facc15'}}>
-            <GlobalStyles />
-            <FunCard title="Round 1" className="w-full max-w-3xl text-center space-y-6 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
-                <div className="space-y-2"><h2 className="text-2xl md:text-4xl font-black text-black uppercase">Invente une situation !</h2><p className="text-gray-500 font-bold text-sm md:text-lg">Sois créatif, bizarre ou juste stupide.</p></div>
-                <div className="relative">
-                    <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-32 md:h-40 p-4 md:p-6 text-xl md:text-3xl text-center font-black border-4 border-black rounded-2xl focus:outline-none focus:shadow-hard resize-none bg-gray-50 leading-normal" placeholder="Un pingouin qui mange une raclette..." maxLength={80}/>
-                    <div className="absolute bottom-4 right-4 text-xs font-bold text-gray-400">{inputContent.length}/80</div>
-                </div>
-                <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" className="w-full py-3 md:py-4 text-lg md:text-xl" icon={CheckCircle}>C'est validé !</FunButton>
-            </FunCard>
-        </div>
-    );
-  }
-
-  if (currentRoom.phase === 'DRAW') {
-    const prevStep = getPreviousContent();
-    if (!prevStep) return <div className="p-10 text-center">Erreur synchro...</div>;
-    return (
-        <div className="min-h-screen bg-blue-500 flex flex-col font-sans h-screen overflow-hidden">
-            <GlobalStyles />
-            <div className="bg-white border-b-4 border-black p-3 md:p-4 shadow-md z-10 flex justify-between items-center">
-                <div className="flex items-center gap-2 md:gap-4">
-                    <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm">
-                        {currentRoom.mode === 'PIXEL' ? 'PIXELISE ÇA' : 'DESSINE ÇA'}
+        {/* --- VIEW: GAME PHASES --- */}
+        {!me?.isReady && (
+            <>
+                {currentRoom.phase === 'EXQUISITE_DRAW' && (
+                    <div className="min-h-screen bg-purple-600 flex flex-col font-sans">
+                        <GlobalStyles />
+                        <div className="bg-white border-b-4 border-black p-3 md:p-4 shadow-md z-10 flex justify-between items-center">
+                            <div className="flex items-center gap-2 md:gap-4">
+                                <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm flex items-center gap-2"><Ghost size={14}/> Exquis</div>
+                                <h2 className="text-lg md:text-2xl font-black text-purple-600">{currentRoom.round === 0 ? "TÊTE" : currentRoom.round === 1 ? "CORPS" : "JAMBES"}</h2>
+                            </div>
+                            <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 text-xs">Fini !</FunButton>
+                        </div>
+                        <div className="flex-1 overflow-y-auto bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center">
+                             <DrawingCanvas onSave={(data) => setInputContent(data)} guideImage={getPreviousContent()?.content} />
+                        </div>
                     </div>
-                    <h2 className="text-lg md:text-2xl font-black truncate max-w-[40vw] text-purple-600">"{prevStep.content}"</h2>
-                </div>
-                {currentRoom.mode !== 'TRADITIONAL' && currentRoom.mode !== 'PIXEL' && (
-                    <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
                 )}
-            </div>
-            <div className="flex-1 bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center overflow-hidden relative">
-                 {currentRoom.mode === 'PIXEL' ? (
-                      <PixelArtEditor onSave={(data) => submitContent(data)} />
-                 ) : currentRoom.mode === 'TRADITIONAL' ? (
-                      <CameraCapture onCapture={(data) => submitContent(data)} />
-                 ) : (
-                      <DrawingCanvas onSave={(data) => setInputContent(data)} />
-                 )}
-            </div>
-        </div>
-    );
-  }
 
-  if (currentRoom.phase === 'GUESS') {
-    const prevStep = getPreviousContent();
-    if (!prevStep) return <div className="p-10 text-center">Erreur synchro...</div>;
-    return (
-        <div className="min-h-screen bg-purple-600 flex items-center justify-center p-4 font-sans bg-pattern">
-            <GlobalStyles />
-            <FunCard className="w-full max-w-5xl flex flex-col md:flex-row overflow-hidden p-0 border-0">
-                <div className="w-full md:w-2/3 bg-gray-100 border-b-4 md:border-b-0 md:border-r-4 border-black flex flex-col relative">
-                    <div className="absolute top-4 left-4 z-10 bg-yellow-400 border-2 border-black px-3 py-1 rounded-full font-black text-xs shadow-hard-sm">DESSIN DE {prevStep.authorName.toUpperCase()}</div>
-                    <div className="flex-1 flex items-center justify-center bg-white p-4">
-                        <img 
-                            src={prevStep.content} 
-                            alt="Guess this" 
-                            className={`max-w-full max-h-[40vh] md:max-h-[50vh] object-contain drop-shadow-lg transform rotate-1 ${currentRoom.mode === 'PIXEL' ? 'image-pixelated' : ''}`} 
-                            style={currentRoom.mode === 'PIXEL' ? { imageRendering: 'pixelated' } : {}}
-                        />
+                {currentRoom.phase === 'WRITE_START' && (
+                    <div className="min-h-screen bg-yellow-400 flex items-center justify-center p-4 font-sans bg-pattern">
+                        <GlobalStyles />
+                        <FunCard title="Round 1" className="w-full max-w-3xl text-center space-y-6 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+                            <div className="space-y-2"><h2 className="text-2xl md:text-4xl font-black text-black uppercase">Invente une situation !</h2></div>
+                            <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-32 md:h-40 p-4 text-xl font-black border-4 border-black rounded-2xl focus:outline-none resize-none bg-gray-50" placeholder="Un pingouin qui mange une raclette..." maxLength={80}/>
+                            <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" className="w-full" icon={CheckCircle}>Valider</FunButton>
+                        </FunCard>
                     </div>
-                </div>
-                <div className="w-full md:w-1/3 p-6 md:p-8 flex flex-col justify-center space-y-6 bg-white">
-                      <div className="text-center space-y-2"><h2 className="text-2xl md:text-3xl font-black uppercase leading-none">C'est quoi ce truc ?</h2><p className="text-gray-500 font-bold text-sm">Décris ce chef-d'œuvre.</p></div>
-                      <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-24 md:h-32 p-4 text-lg md:text-xl text-center font-bold border-4 border-black rounded-xl focus:outline-none focus:shadow-hard bg-blue-50 resize-none" placeholder="Je pense que c'est..."/>
-                    <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" icon={CheckCircle}>Valider</FunButton>
-                </div>
-            </FunCard>
-        </div>
-    );
-  }
+                )}
 
-  if (currentRoom.phase === 'VOTE') {
-    const me = currentRoom.players.find(p => p.uid === myId);
-    if (me?.hasVoted) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-4 text-center text-white space-y-6 bg-pattern"><GlobalStyles /><div className="w-24 h-24 md:w-32 md:h-32 bg-yellow-400 rounded-full border-4 border-black flex items-center justify-center animate-bounce shadow-hard-lg"><Star className="text-black fill-white" size={48} /></div><div><h2 className="text-3xl md:text-4xl font-black uppercase text-yellow-400 drop-shadow-md">Vote Enregistré !</h2><p className="text-white/80 font-bold mt-2 text-lg md:text-xl">Suspense...</p></div><div className="flex flex-wrap gap-3 justify-center mt-8 p-4 bg-black/30 rounded-xl backdrop-blur-sm">{currentRoom.players.map(p => <div key={p.uid} title={p.name} className={`w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-black transition-all ${p.hasVoted ? 'bg-green-400 scale-125' : 'bg-gray-600'}`} />)}</div></div>;
+                {currentRoom.phase === 'DRAW' && (
+                    <div className="h-screen w-full bg-blue-500 flex flex-col font-sans overflow-hidden fixed inset-0">
+                        <GlobalStyles />
+                        {/* HEADER FIXE */}
+                        <div className="bg-white border-b-4 border-black p-2 md:p-3 shadow-md z-50 flex justify-between items-center shrink-0">
+                            <div className="flex items-center gap-2 md:gap-4 min-w-0">
+                                <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm shrink-0">
+                                    {currentRoom.mode === 'PIXEL' ? 'PIXELISE ÇA' : 'DESSINE ÇA'}
+                                </div>
+                                <h2 className="text-base md:text-2xl font-black truncate text-purple-600">
+                                    "{getPreviousContent()?.content}"
+                                </h2>
+                            </div>
+                            {currentRoom.mode !== 'TRADITIONAL' && currentRoom.mode !== 'PIXEL' && (
+                                <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm shrink-0">
+                                    {inputContent ? 'Fini !' : 'Fin'}
+                                </FunButton>
+                            )}
+                        </div>
 
-    const allDrawings: any[] = [];
-    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === 'PIXEL') {
-        Object.entries(currentRoom.chains).forEach(([ownerId, chain]) => {
-            chain.steps.forEach((step, idx) => {
-                if (step.type === 'DRAWING') allDrawings.push({ chainOwnerId: ownerId, stepIndex: idx, step });
-            });
-        });
-    } else {
-        Object.entries(currentRoom.chains).forEach(([ownerId, chain]) => {
-             if(chain.steps.length > 0) allDrawings.push({ chainOwnerId: ownerId, stepIndex: 0, step: chain.steps[0], isExquisite: true, fullChain: chain.steps });
-        });
-    }
-
-    return (
-        <div className="min-h-screen bg-purple-900 p-4 overflow-y-auto font-sans">
-            <GlobalStyles />
-            <div className="max-w-7xl mx-auto">
-                <div className="text-center mb-8 md:mb-12 pt-8 space-y-4">
-                    <h2 className="text-3xl md:text-5xl font-black text-yellow-400 uppercase tracking-tight drop-shadow-[4px_4px_0_rgba(0,0,0,1)] stroke-black" style={{WebkitTextStroke: '2px black'}}>
-                        {currentRoom.mode === 'CLASSIC' ? 'Le Musée' : 'Les Monstres'}
-                    </h2>
-                    <p className="text-white font-bold text-lg md:text-xl bg-black/50 inline-block px-4 py-1 md:px-6 md:py-2 rounded-full">Vote pour ta création préférée !</p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8 pb-20">
-                    {allDrawings.map((item, i) => {
-                        const isMine = item.step.authorId === myId;
-                        const rot = ['rotate-1', '-rotate-1', 'rotate-2', '-rotate-2'][i % 4];
-                        return (
-                            <button key={`${item.chainOwnerId}-${item.stepIndex}`} onClick={() => !isMine && castVote(item.chainOwnerId, item.stepIndex)} disabled={isMine} className={`group relative bg-white p-2 md:p-3 pb-8 md:pb-12 border-4 border-black shadow-hard transition-all duration-300 transform ${rot} hover:scale-105 hover:z-10 hover:rotate-0 ${isMine ? 'opacity-60 cursor-not-allowed grayscale' : 'cursor-pointer hover:shadow-hard-lg'}`}>
-                                <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-24 h-8 bg-white/30 backdrop-blur-sm border border-white/50 shadow-sm transform -rotate-1"></div>
-                                {item.isExquisite ? (
-                                    <div className="aspect-[1/3] flex flex-col bg-gray-50 border-2 border-gray-200 mb-2 overflow-hidden">
-                                        {item.fullChain.map((part:any, idx:number) => (<img key={idx} src={part.content} className="w-full h-1/3 object-cover border-b border-dashed border-gray-300" alt="Part" />))}
-                                    </div>
+                        {/* ZONE CENTRALE (FLEX-1 pour prendre toute la place restante) */}
+                        <div className="flex-1 bg-pattern p-2 flex flex-col items-center justify-center min-h-0 w-full">
+                                {currentRoom.mode === 'PIXEL' ? (
+                                    <PixelArtEditor onSave={(data) => submitContent(data)} />
+                                ) : currentRoom.mode === 'TRADITIONAL' ? (
+                                    <CameraCapture onCapture={submitContent} />
                                 ) : (
-                                    <div className="aspect-[4/3] bg-gray-50 border-2 border-gray-200 overflow-hidden mb-2">
-                                        <img 
-                                            src={item.step.content} 
-                                            alt="Candidate" 
-                                            className="w-full h-full object-cover"
-                                            style={currentRoom.mode === 'PIXEL' ? { imageRendering: 'pixelated' } : {}}
-                                        />
-                                    </div>
+                                    <DrawingCanvas onSave={(data: string) => setInputContent(data)} />
                                 )}
-                                <p className="font-handwriting text-gray-500 font-bold text-sm text-left transform rotate-1">#{i + 1}</p>
-                                {isMine && <div className="absolute inset-0 flex items-center justify-center bg-black/10 font-black text-red-600 text-xl md:text-2xl uppercase tracking-widest -rotate-12 border-4 border-red-600 m-8 rounded-xl bg-white/80">C'est toi !</div>}
-                                {!isMine && <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Star className="text-yellow-400 fill-yellow-400 drop-shadow-lg animate-pop" size={80} /></div>}
-                            </button>
-                        )
-                    })}
-                </div>
-            </div>
-        </div>
-    );
-  }
+                        </div>
+                    </div>
+                )}
 
-  if (currentRoom.phase === 'PODIUM') return <PodiumView room={currentRoom} onResults={() => {const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);updateDoc(roomRef, { phase: 'RESULTS' });}} />;
-  if (currentRoom.phase === 'RESULTS') return <ResultsView room={currentRoom} onRestart={() => window.location.reload()} currentUserId={myId || ''} />;
-  return null;
+                {currentRoom.phase === 'GUESS' && (
+                    <div className="min-h-screen bg-purple-600 flex items-center justify-center p-4 font-sans bg-pattern">
+                        <GlobalStyles />
+                        <FunCard className="w-full max-w-5xl flex flex-col md:flex-row overflow-hidden p-0 border-0">
+                            <div className="w-full md:w-2/3 bg-gray-100 border-b-4 md:border-b-0 md:border-r-4 border-black flex flex-col relative">
+                                <div className="flex-1 flex items-center justify-center bg-white p-4"><img src={getPreviousContent()?.content} alt="Guess" className={`max-w-full max-h-[50vh] object-contain ${currentRoom.mode==='PIXEL'?'image-pixelated':''}`} /></div>
+                            </div>
+                            <div className="w-full md:w-1/3 p-6 md:p-8 flex flex-col justify-center space-y-6 bg-white">
+                                <div className="text-center space-y-2"><h2 className="text-2xl md:text-3xl font-black uppercase leading-none">C'est quoi ?</h2></div>
+                                <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-24 p-4 text-lg font-bold border-4 border-black rounded-xl focus:outline-none bg-blue-50 resize-none" placeholder="Je pense que c'est..."/>
+                                <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" icon={CheckCircle}>Valider</FunButton>
+                            </div>
+                        </FunCard>
+                    </div>
+                )}
+            </>
+        )}
+
+        {/* --- VIEW: VOTE --- */}
+        {currentRoom.phase === 'VOTE' && (
+             <div className="min-h-screen bg-purple-900 p-4 overflow-y-auto font-sans">
+                <GlobalStyles />
+                <div className="max-w-7xl mx-auto">
+                     <div className="text-center mb-8 md:mb-12 pt-8 space-y-4"><h2 className="text-3xl md:text-5xl font-black text-yellow-400 uppercase">Le Musée</h2><p className="text-white font-bold bg-black/50 inline-block px-4 py-1 rounded-full">Vote pour ta création préférée !</p></div>
+                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8 pb-20">
+                        {/* LOGIQUE DE VOTE POUR TOUS LES MODES */}
+                        {currentRoom.mode !== 'EXQUISITE' ? (
+                            Object.entries(currentRoom.chains).flatMap(([oid, chain]) => chain.steps.map((s,i) => ({oid, i, s})).filter(x => x.s.type === 'DRAWING')).map((item, i) => {
+                                const isMine = item.s.authorId === myId;
+                                return (
+                                    <button key={i} onClick={() => !isMine && !me?.hasVoted && (playPop(), castVote(item.oid, item.i))} disabled={isMine || me?.hasVoted} className={`group relative bg-white p-2 pb-8 border-4 border-black shadow-hard transition-all transform hover:scale-105 ${isMine?'opacity-60 cursor-not-allowed grayscale':''} ${me?.hasVoted?'opacity-50':''}`}>
+                                        <div className="aspect-[4/3] bg-gray-50 border-2 border-gray-200 overflow-hidden mb-2"><img src={item.s.content} className={`w-full h-full object-cover ${currentRoom.mode==='PIXEL'?'image-pixelated':''}`}/></div>
+                                        {isMine && <div className="absolute inset-0 flex items-center justify-center bg-black/10 font-black text-red-600 text-xl uppercase -rotate-12 border-4 border-red-600 m-8 rounded-xl bg-white/80">C'est toi !</div>}
+                                    </button>
+                                )
+                            })
+                        ) : (
+                            Object.entries(currentRoom.chains).map(([oid, chain], i) => {
+                                const isMine = chain.ownerId === myId;
+                                return (
+                                     <button key={i} onClick={() => !isMine && !me?.hasVoted && (playPop(), castVote(oid, 0))} disabled={isMine || me?.hasVoted} className="bg-white p-2 border-4 border-black shadow-hard hover:scale-105 transition-transform">
+                                        {chain.steps.map((s, idx) => <img key={idx} src={s.content} className="w-full"/>)}
+                                     </button>
+                                )
+                            })
+                        )}
+                     </div>
+                </div>
+             </div>
+        )}
+
+        {/* --- VIEW: PODIUM --- */}
+        {currentRoom.phase === 'PODIUM' && <PodiumView room={currentRoom} onResults={() => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode), { phase: 'RESULTS' })} />}
+        
+        {/* --- VIEW: RESULTS --- */}
+        {currentRoom.phase === 'RESULTS' && (
+            <ResultsView 
+                room={currentRoom} 
+                onRestart={returnToLobby} 
+                currentUserId={myId || ''} 
+                isHost={me?.isHost} 
+            />
+        )}
+      </>
+  );
 }
+
+// ==========================================
+// 10. SOUS-VUES (PODIUM & RESULTATS)
+// ==========================================
 
 function PodiumView({ room, onResults }: { room: RoomData, onResults: () => void }) {
     const scores: Record<string, number> = {};
@@ -1060,22 +1416,21 @@ function PodiumView({ room, onResults }: { room: RoomData, onResults: () => void
     return (
         <div className="min-h-screen bg-purple-900 flex flex-col items-center justify-center p-4 overflow-hidden relative font-sans bg-pattern">
             <GlobalStyles />
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">{[...Array(50)].map((_, i) => <div key={i} className="absolute w-4 h-4 bg-yellow-400 animate-float" style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, animationDelay: `${Math.random() * 5}s`, backgroundColor: ['#FFD700', '#FF69B4', '#00CED1', '#ffffff'][Math.floor(Math.random() * 4)] }} />)}</div>
             <div className="z-10 text-center mb-8 md:mb-12 mt-8"><h1 className="text-5xl md:text-8xl font-black text-yellow-400 uppercase tracking-tighter drop-shadow-[8px_8px_0_rgba(0,0,0,1)] stroke-black mb-4 animate-wobble" style={{WebkitTextStroke: '2px black'}}>PODIUM</h1></div>
             <div className="flex items-end justify-center gap-2 md:gap-8 mb-12 z-10 w-full max-w-5xl px-2 h-[300px] md:h-[450px]">
-                {top3[1] ? ( <div className="flex flex-col items-center w-1/3 animate-pop" style={{animationDelay: '0.5s'}}><div className="mb-2 md:mb-4 flex flex-col items-center"><div className="w-12 h-12 md:w-24 md:h-24 rounded-full border-4 border-black bg-gray-300 flex items-center justify-center text-xl md:text-4xl font-black text-black shadow-hard mb-2">{top3[1].name.charAt(0).toUpperCase()}</div><span className="font-bold text-white bg-black px-2 py-1 rounded-full text-[10px] md:text-sm mb-1 truncate max-w-[80px] md:max-w-[100px] text-center">{top3[1].name}</span><span className="font-black text-gray-300 text-sm md:text-2xl">{scores[top3[1].uid]} pts</span></div><div className="w-full h-24 md:h-48 bg-gray-300 border-4 border-black rounded-t-2xl shadow-hard flex items-center justify-center relative"><span className="text-4xl md:text-6xl font-black text-black/20">2</span></div></div> ) : <div className="w-1/3"></div>}
-                {top3[0] ? ( <div className="flex flex-col items-center w-1/3 -mt-4 md:-mt-12 animate-pop" style={{animationDelay: '1s'}}><Crown size={32} className="text-yellow-400 fill-yellow-400 mb-2 md:mb-4 drop-shadow-[4px_4px_0_rgba(0,0,0,1)] animate-bounce md:w-12 md:h-12"/><div className="mb-2 md:mb-4 flex flex-col items-center relative"><div className="w-16 h-16 md:w-32 md:h-32 rounded-full border-4 border-black bg-yellow-400 flex items-center justify-center text-3xl md:text-6xl font-black text-black shadow-hard mb-2 z-10">{top3[0].name.charAt(0).toUpperCase()}</div><span className="font-bold text-white bg-black px-3 py-1 rounded-full text-xs md:text-lg mb-1 truncate max-w-[100px] md:max-w-[120px] text-center">{top3[0].name}</span><span className="font-black text-yellow-400 text-lg md:text-4xl drop-shadow-md">{scores[top3[0].uid]} pts</span></div><div className="w-full h-40 md:h-80 bg-yellow-400 border-4 border-black rounded-t-2xl shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center relative overflow-hidden"><div className="absolute inset-0 bg-white/20 transform rotate-45 translate-y-1/2"></div><span className="text-6xl md:text-8xl font-black text-black/20">1</span></div></div> ) : null}
-                {top3[2] ? ( <div className="flex flex-col items-center w-1/3 animate-pop" style={{animationDelay: '0.7s'}}><div className="mb-2 md:mb-4 flex flex-col items-center"><div className="w-12 h-12 md:w-24 md:h-24 rounded-full border-4 border-black bg-orange-400 flex items-center justify-center text-xl md:text-4xl font-black text-black shadow-hard mb-2">{top3[2].name.charAt(0).toUpperCase()}</div><span className="font-bold text-white bg-black px-2 py-1 rounded-full text-[10px] md:text-sm mb-1 truncate max-w-[80px] md:max-w-[100px] text-center">{top3[2].name}</span><span className="font-black text-orange-400 text-sm md:text-2xl">{scores[top3[2].uid]} pts</span></div><div className="w-full h-16 md:h-32 bg-orange-400 border-4 border-black rounded-t-2xl shadow-hard flex items-center justify-center relative"><span className="text-3xl md:text-5xl font-black text-black/20">3</span></div></div> ) : <div className="w-1/3"></div>}
+                {top3[1] ? ( <div className="flex flex-col items-center w-1/3 animate-pop" style={{animationDelay: '0.5s'}}><div className="mb-2 md:mb-4 flex flex-col items-center"><div className="w-12 h-12 md:w-24 md:h-24 rounded-full border-4 border-black bg-gray-300 flex items-center justify-center text-xl md:text-4xl font-black text-black shadow-hard mb-2 overflow-hidden"><img src={top3[1].avatarImage} className="w-full h-full object-cover"/></div><span className="font-bold text-white bg-black px-2 py-1 rounded-full text-[10px] md:text-sm mb-1 truncate max-w-[80px] md:max-w-[100px] text-center">{top3[1].name}</span><span className="font-black text-gray-300 text-sm md:text-2xl">{scores[top3[1].uid]} pts</span></div><div className="w-full h-24 md:h-48 bg-gray-300 border-4 border-black rounded-t-2xl shadow-hard flex items-center justify-center relative"><span className="text-4xl md:text-6xl font-black text-black/20">2</span></div></div> ) : <div className="w-1/3"></div>}
+                {top3[0] ? ( <div className="flex flex-col items-center w-1/3 -mt-4 md:-mt-12 animate-pop" style={{animationDelay: '1s'}}><Crown size={32} className="text-yellow-400 fill-yellow-400 mb-2 md:mb-4 drop-shadow-[4px_4px_0_rgba(0,0,0,1)] animate-bounce md:w-12 md:h-12"/><div className="mb-2 md:mb-4 flex flex-col items-center relative"><div className="w-16 h-16 md:w-32 md:h-32 rounded-full border-4 border-black bg-yellow-400 flex items-center justify-center text-3xl md:text-6xl font-black text-black shadow-hard mb-2 z-10 overflow-hidden"><img src={top3[0].avatarImage} className="w-full h-full object-cover"/></div><span className="font-bold text-white bg-black px-3 py-1 rounded-full text-xs md:text-lg mb-1 truncate max-w-[100px] md:max-w-[120px] text-center">{top3[0].name}</span><span className="font-black text-yellow-400 text-lg md:text-4xl drop-shadow-md">{scores[top3[0].uid]} pts</span></div><div className="w-full h-40 md:h-80 bg-yellow-400 border-4 border-black rounded-t-2xl shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center relative overflow-hidden"><div className="absolute inset-0 bg-white/20 transform rotate-45 translate-y-1/2"></div><span className="text-6xl md:text-8xl font-black text-black/20">1</span></div></div> ) : null}
+                {top3[2] ? ( <div className="flex flex-col items-center w-1/3 animate-pop" style={{animationDelay: '0.7s'}}><div className="mb-2 md:mb-4 flex flex-col items-center"><div className="w-12 h-12 md:w-24 md:h-24 rounded-full border-4 border-black bg-orange-400 flex items-center justify-center text-xl md:text-4xl font-black text-black shadow-hard mb-2 overflow-hidden"><img src={top3[2].avatarImage} className="w-full h-full object-cover"/></div><span className="font-bold text-white bg-black px-2 py-1 rounded-full text-[10px] md:text-sm mb-1 truncate max-w-[80px] md:max-w-[100px] text-center">{top3[2].name}</span><span className="font-black text-orange-400 text-sm md:text-2xl">{scores[top3[2].uid]} pts</span></div><div className="w-full h-16 md:h-32 bg-orange-400 border-4 border-black rounded-t-2xl shadow-hard flex items-center justify-center relative"><span className="text-3xl md:text-5xl font-black text-black/20">3</span></div></div> ) : <div className="w-1/3"></div>}
             </div>
             <FunButton onClick={onResults} color="white" className="z-20 text-lg md:text-xl px-8 py-4 animate-pulse mb-8">Voir le carnage <ArrowRight size={24}/></FunButton>
         </div>
     );
 }
 
-function ResultsView({ room, onRestart, currentUserId }: { room: RoomData, onRestart: () => void, currentUserId: string }) {
+function ResultsView({ room, onRestart, currentUserId, isHost }: { room: RoomData, onRestart: () => void, currentUserId: string, isHost?: boolean }) {
     const [viewingChainOwner, setViewingChainOwner] = useState<string>(room.players[0].uid);
     const currentChain = room.chains[viewingChainOwner];
-    const ownerName = room.players.find(p => p.uid === viewingChainOwner)?.name;
+    const owner = room.players.find(p => p.uid === viewingChainOwner);
 
     return (
         <div className="min-h-screen bg-purple-100 font-sans flex flex-col">
@@ -1089,13 +1444,13 @@ function ResultsView({ room, onRestart, currentUserId }: { room: RoomData, onRes
 
             <div className="flex-1 overflow-y-auto p-4 md:p-12 bg-pattern">
                 <div className="max-w-2xl mx-auto space-y-8 md:space-y-12 relative">
-                    <div className="text-center mb-8 md:mb-12 relative"><div className="bg-white border-4 border-black p-4 md:p-6 inline-block transform -rotate-2 shadow-hard-lg rounded-sm"><h2 className="text-xl md:text-2xl font-black uppercase text-gray-400">Album de</h2><h3 className="text-3xl md:text-5xl font-black text-purple-600 uppercase">{ownerName}</h3></div></div>
+                    <div className="text-center mb-8 md:mb-12 relative"><div className="bg-white border-4 border-black p-4 md:p-6 inline-block transform -rotate-2 shadow-hard-lg rounded-sm"><h2 className="text-xl md:text-2xl font-black uppercase text-gray-400">Album de</h2><h3 className="text-3xl md:text-5xl font-black text-purple-600 uppercase">{owner?.name}</h3></div></div>
                     
                     {room.mode === 'EXQUISITE' ? (
                         <div className="flex flex-col items-center">
                             <div className="bg-white border-4 border-black p-2 shadow-hard-lg w-full max-w-[400px] relative">
                                 <div className="absolute -top-3 -right-3 bg-yellow-400 border-4 border-black p-1 md:p-2 rounded-full font-black transform rotate-12 text-[10px] md:text-xs">CADAVRE EXQUIS</div>
-                                {currentChain.steps.map((step, idx) => (
+                                {currentChain?.steps.map((step, idx) => (
                                     <img key={idx} src={step.content} className="w-full border-b-2 border-black border-dashed last:border-0" style={{display: 'block'}} />
                                 ))}
                             </div>
@@ -1103,7 +1458,7 @@ function ResultsView({ room, onRestart, currentUserId }: { room: RoomData, onRes
                     ) : (
                         <>
                             <div className="absolute left-4 md:left-8 top-32 bottom-0 w-1 md:w-2 bg-black ml-[15px] md:ml-[27px] z-0 hidden md:block border-l-2 border-r-2 border-black bg-stripes-white"></div>
-                            {currentChain.steps.map((step, idx) => (
+                            {currentChain?.steps.map((step, idx) => (
                                 <div key={idx} className="relative z-10 flex gap-4 md:gap-6 group">
                                     <div className="hidden md:flex flex-col items-center"><div className="w-12 h-12 md:w-16 md:h-16 rounded-full border-4 border-black bg-white flex items-center justify-center text-xl md:text-2xl font-black shadow-hard z-10 relative">{idx + 1}</div></div>
                                     <div className="flex-1">
@@ -1134,7 +1489,16 @@ function ResultsView({ room, onRestart, currentUserId }: { room: RoomData, onRes
                     )}
                 </div>
             </div>
-            <div className="p-4 md:p-6 bg-white border-t-4 border-black flex justify-center shadow-[0_-4px_10px_rgba(0,0,0,0.1)]"><FunButton onClick={onRestart} color="purple" icon={Zap}>Rejouer</FunButton></div>
+            <div className="p-4 md:p-6 bg-white border-t-4 border-black flex justify-center shadow-[0_-4px_10px_rgba(0,0,0,0.1)]">
+                {isHost ? (
+                    <FunButton onClick={onRestart} color="purple" icon={Zap}>Retour au Salon</FunButton>
+                ) : (
+                    <div className="text-gray-500 font-bold animate-pulse flex items-center gap-2">
+                        <Loader2 className="animate-spin"/>
+                        L'hôte va relancer la partie...
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
