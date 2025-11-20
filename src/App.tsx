@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useLayoutEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -15,10 +15,6 @@ import {
   increment,
   getDoc
 } from 'firebase/firestore';
-// --- IMPORTS 3D ---
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Grid } from '@react-three/drei';
-import * as THREE from 'three';
 import { 
   Pencil, 
   Eraser, 
@@ -39,7 +35,9 @@ import {
   Camera,
   Upload,
   RefreshCw,
-  Box 
+  Box,
+  Grid3X3, // Nouvelle icône pour le Pixel Art
+  PaintBucket // Nouvelle icône pour le pot de peinture
 } from 'lucide-react';
 
 // --- CONFIGURATION FIREBASE ---
@@ -90,7 +88,8 @@ const GlobalStyles = () => (
 );
 
 // --- TYPES ---
-type GameMode = 'CLASSIC' | 'EXQUISITE' | 'TRADITIONAL' | '3D';
+// Remplacement de '3D' par 'PIXEL'
+type GameMode = 'CLASSIC' | 'EXQUISITE' | 'TRADITIONAL' | 'PIXEL';
 type Phase = 'LOBBY' | 'WRITE_START' | 'DRAW' | 'GUESS' | 'VOTE' | 'PODIUM' | 'RESULTS' | 'EXQUISITE_DRAW';
 
 interface Player {
@@ -200,254 +199,175 @@ const PlayerBadge = ({ name, isHost, isReady, isMe, hasVoted, uid, color = 'bg-g
   </div>
 );
 
-// --- COMPOSANTS 3D OPTIMISÉS ---
-
-// 1. SCÈNE VOXEL (Fix Gomme & Tolérance Clic)
-const VoxelScene = ({ color, isEraser, onCaptureRef }: any) => {
-  const [cubes, setCubes] = useState<any[]>([]);
-  
-  const ghostRef = useRef<THREE.Mesh>(null);
-  const { gl, scene, camera } = useThree();
-  const interaction = useRef({ startX: 0, startY: 0, isDown: false });
-
-  useEffect(() => {
-    onCaptureRef.current = () => {
-      const prevGrid = scene.getObjectByName('grid-helper');
-      if(prevGrid) prevGrid.visible = false;
-      if(ghostRef.current) ghostRef.current.visible = false; 
-      
-      gl.render(scene, camera);
-      
-      if(prevGrid) prevGrid.visible = true;
-      return gl.domElement.toDataURL('image/jpeg', 0.6);
-    };
-  }, [gl, scene, camera, onCaptureRef]);
-
-  const updateGhost = (visible: boolean, position?: [number, number, number], isEraserMode?: boolean) => {
-      if (ghostRef.current) {
-          ghostRef.current.visible = visible;
-          if (position) {
-              ghostRef.current.position.set(...position);
-          }
-          if (isEraserMode !== undefined) {
-             const mat = ghostRef.current.material as THREE.MeshBasicMaterial;
-             mat.color.set(isEraserMode ? '#ff0000' : color);
-             mat.opacity = isEraserMode ? 0.5 : 0.5;
-          }
-      }
-  };
-
-  const calculateVoxelPosition = (point: THREE.Vector3, normal: THREE.Vector3) => {
-    const target = point.clone();
-    target.addScaledVector(normal, 0.1); // Petite marge pour être DANS la case
-
-    const x = Math.floor(target.x);
-    const y = Math.floor(target.y);
-    const z = Math.floor(target.z);
-
-    return {
-        grid: [x, y, z],
-        display: [x + 0.5, y + 0.5, z + 0.5] as [number, number, number]
-    };
-  };
-
-  const handlePointerMove = (e: any) => {
-    e.stopPropagation();
-    const { point, face, object } = e;
-    
-    if (!point || !face) {
-        updateGhost(false);
-        return;
-    }
-
-    if (isEraser) {
-        // Si on survole un cube (userData.id présent)
-        if (object.userData.id) {
-            updateGhost(true, object.position.toArray(), true);
-        } else {
-            updateGhost(false);
-        }
-        return;
-    }
-
-    const calc = calculateVoxelPosition(point, face.normal);
-    
-    const [x, y, z] = calc.grid;
-    if (Math.abs(x) > 10 || Math.abs(z) > 10 || y < 0 || y > 15) {
-        updateGhost(false);
-        return;
-    }
-
-    updateGhost(true, calc.display, false);
-  };
-
-  const handlePointerOut = () => updateGhost(false);
-
-  const onDown = (e: any) => {
-      e.stopPropagation();
-      interaction.current.startX = e.clientX;
-      interaction.current.startY = e.clientY;
-      interaction.current.isDown = true;
-      handlePointerMove(e); 
-  };
-
-  const onUp = (e: any) => {
-      if (!interaction.current.isDown) return;
-      interaction.current.isDown = false;
-
-      const dist = Math.sqrt(
-          Math.pow(e.clientX - interaction.current.startX, 2) +
-          Math.pow(e.clientY - interaction.current.startY, 2)
-      );
-
-      // TOLÉRANCE AUGMENTÉE (30px) : On peut bouger la souris un peu et ça clique quand même
-      if (dist < 30) { 
-          e.stopPropagation();
-          const { point, face, object } = e;
-          if (!point || !face) return;
-
-          if (isEraser) {
-              // Si on clique sur un cube
-              if (object.userData.id) {
-                  setCubes(prev => prev.filter(c => c.id !== object.userData.id));
-                  updateGhost(false);
-              }
-          } else {
-              const calc = calculateVoxelPosition(point, face.normal);
-              
-              if (calc.grid[1] < 0) return; 
-
-              const [gx, gy, gz] = calc.display;
-              const exists = cubes.some(c => 
-                  Math.abs(c.position[0] - gx) < 0.01 && 
-                  Math.abs(c.position[1] - gy) < 0.01 && 
-                  Math.abs(c.position[2] - gz) < 0.01
-              );
-
-              if (!exists) {
-                  setCubes(prev => [...prev, { 
-                      id: Math.random().toString(36), 
-                      position: calc.display, 
-                      color 
-                  }]);
-              }
-          }
-      }
-  };
-
-  const interactiveEvents = {
-      onPointerMove: handlePointerMove,
-      onPointerOut: handlePointerOut,
-      onPointerDown: onDown,
-      onPointerUp: onUp
-  };
-
-  return (
-    <>
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[10, 20, 10]} intensity={1.2} castShadow />
-      <OrbitControls makeDefault maxPolarAngle={Math.PI / 2} />
-
-      <group>
-        {/* CUBE FANTÔME */}
-        <mesh ref={ghostRef} visible={false} raycast={() => null}>
-           <boxGeometry args={[1.01, 1.01, 1.01]} />
-           <meshBasicMaterial transparent depthTest={false} />
-           <lineSegments>
-             <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
-             <lineBasicMaterial color="black" opacity={0.3} transparent />
-           </lineSegments>
-        </mesh>
-
-        <Grid 
-            name="grid-helper"
-            position={[0, -0.01, 0]} 
-            args={[20, 20]} 
-            cellColor="#6b7280" 
-            sectionColor="#000000" 
-            infiniteGrid 
-            fadeDistance={30} 
-            pointerEvents="none"
-        />
-
-        {/* SOL INVISIBLE */}
-        <mesh 
-            rotation={[-Math.PI / 2, 0, 0]} 
-            position={[0, 0, 0]} 
-            visible={false}
-            {...interactiveEvents} 
-        >
-            <planeGeometry args={[100, 100]} />
-            <meshBasicMaterial side={THREE.DoubleSide} />
-        </mesh>
-
-        {/* CUBES POSÉS */}
-        {cubes.map((c) => (
-          <mesh 
-            key={c.id} 
-            position={c.position} 
-            userData={{ id: c.id }}
-            {...interactiveEvents} 
-          >
-            <boxGeometry args={[1, 1, 1]} />
-            <meshStandardMaterial color={c.color} />
-            {/* FIX CRITIQUE GOMME : 
-                pointerEvents="none" sur les lignes permet de cliquer "à travers" elles.
-                Sinon le clic touchait la ligne noire (qui n'a pas d'ID) au lieu du cube.
-            */}
-            <lineSegments pointerEvents="none">
-                <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
-                <lineBasicMaterial color="black" linewidth={2} />
-            </lineSegments>
-          </mesh>
-        ))}
-      </group>
-      
-      <mesh position={[0, -0.1, 0]} rotation={[-Math.PI/2, 0, 0]} pointerEvents="none">
-        <planeGeometry args={[50, 50]} />
-        <meshBasicMaterial color="#e5e7eb" />
-      </mesh>
-    </>
+// --- NOUVEAU COMPOSANT PIXEL ART ---
+const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
+  const GRID_WIDTH = 32;
+  const GRID_HEIGHT = 24;
+  const [pixels, setPixels] = useState<string[][]>(
+    Array(GRID_HEIGHT).fill(null).map(() => Array(GRID_WIDTH).fill('#ffffff'))
   );
-};
+  const [color, setColor] = useState('#000000');
+  const [tool, setTool] = useState<'PENCIL' | 'BUCKET' | 'ERASER'>('PENCIL');
+  const [showGrid, setShowGrid] = useState(true);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isDrawing = useRef(false);
 
-const ThreeDEditor = ({ onSave }: { onSave: (data: string) => void }) => {
-  const [color, setColor] = useState('#eab308');
-  const [isEraser, setIsEraser] = useState(false);
-  const captureRef = useRef<() => string>(() => '');
+  // Initialiser avec du blanc
+  useEffect(() => {
+      drawCanvas();
+  }, [pixels, showGrid]);
+
+  const drawCanvas = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const cellW = w / GRID_WIDTH;
+      const cellH = h / GRID_HEIGHT;
+
+      // Fond
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+
+      // Pixels
+      pixels.forEach((row, y) => {
+          row.forEach((col, x) => {
+              ctx.fillStyle = col;
+              ctx.fillRect(x * cellW, y * cellH, cellW + 1, cellH + 1);
+          });
+      });
+
+      // Grille
+      if (showGrid) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let x = 0; x <= GRID_WIDTH; x++) {
+              ctx.moveTo(x * cellW, 0);
+              ctx.lineTo(x * cellW, h);
+          }
+          for (let y = 0; y <= GRID_HEIGHT; y++) {
+              ctx.moveTo(0, y * cellH);
+              ctx.lineTo(w, y * cellH);
+          }
+          ctx.stroke();
+      }
+  };
+
+  const handleAction = (e: any) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const rect = canvas.getBoundingClientRect();
+      // Support tactile et souris
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+      const x = Math.floor((clientX - rect.left) / (rect.width / GRID_WIDTH));
+      const y = Math.floor((clientY - rect.top) / (rect.height / GRID_HEIGHT));
+
+      if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
+          if (tool === 'BUCKET') {
+              floodFill(x, y, color);
+          } else {
+              const newColor = tool === 'ERASER' ? '#ffffff' : color;
+              if (pixels[y][x] !== newColor) {
+                  const newPixels = [...pixels];
+                  newPixels[y] = [...newPixels[y]];
+                  newPixels[y][x] = newColor;
+                  setPixels(newPixels);
+              }
+          }
+      }
+  };
+
+  const floodFill = (startX: number, startY: number, fillCol: string) => {
+      const targetColor = pixels[startY][startX];
+      if (targetColor === fillCol) return;
+
+      const newPixels = pixels.map(row => [...row]);
+      const stack = [[startX, startY]];
+
+      while (stack.length) {
+          const [x, y] = stack.pop()!;
+          if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) continue;
+          if (newPixels[y][x] !== targetColor) continue;
+
+          newPixels[y][x] = fillCol;
+          stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+      }
+      setPixels(newPixels);
+  };
+
+  const handleExport = () => {
+      // Créer un canvas temporaire haute résolution pour l'export
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 640; // Largeur finale
+      tempCanvas.height = 480; // Hauteur finale
+      const ctx = tempCanvas.getContext('2d');
+      if (ctx) {
+          // IMPORTANT: Désactiver le lissage pour avoir un effet pixel art net
+          ctx.imageSmoothingEnabled = false; 
+          
+          const cellW = tempCanvas.width / GRID_WIDTH;
+          const cellH = tempCanvas.height / GRID_HEIGHT;
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0,0, tempCanvas.width, tempCanvas.height);
+
+          pixels.forEach((row, y) => {
+              row.forEach((col, x) => {
+                  ctx.fillStyle = col;
+                  // +1 pour éviter les micro-lignes blanches
+                  ctx.fillRect(x * cellW, y * cellH, cellW + 1, cellH + 1); 
+              });
+          });
+          onSave(tempCanvas.toDataURL('image/jpeg', 0.8));
+      }
+  };
 
   return (
-    <div className="flex flex-col gap-4 items-center w-full h-full">
-       <div className="relative w-full flex-1 bg-gray-50 rounded-xl border-4 border-black shadow-hard-lg overflow-hidden touch-none cursor-crosshair">
-          <div className="absolute top-2 left-2 z-10 bg-black/70 text-white text-xs px-3 py-2 rounded-lg pointer-events-none font-bold backdrop-blur-sm border border-white/20">
-             🖱️ Clic gauche: Poser/Gommer<br/>
-             ✋ Glisser: Tourner caméra
-          </div>
-          <Canvas 
-            gl={{ preserveDrawingBuffer: true, antialias: true }} 
-            shadows 
-            camera={{ position: [8, 8, 8], fov: 45 }}
-          >
-             <Suspense fallback={null}>
-                <VoxelScene color={color} isEraser={isEraser} onCaptureRef={captureRef} />
-             </Suspense>
-          </Canvas>
+    <div className="flex flex-col gap-4 items-center w-full h-full max-w-3xl mx-auto">
+       <div className="relative w-full aspect-[4/3] bg-gray-200 rounded-xl border-4 border-black shadow-hard-lg overflow-hidden touch-none cursor-crosshair">
+          <canvas 
+            ref={canvasRef}
+            width={640}
+            height={480}
+            className="w-full h-full touch-none"
+            onPointerDown={(e) => {
+                e.preventDefault();
+                isDrawing.current = true;
+                handleAction(e);
+            }}
+            onPointerMove={(e) => {
+                e.preventDefault();
+                if (isDrawing.current && tool !== 'BUCKET') handleAction(e);
+            }}
+            onPointerUp={() => isDrawing.current = false}
+            onPointerLeave={() => isDrawing.current = false}
+          />
        </div>
 
        <div className="bg-white border-4 border-black rounded-2xl p-3 shadow-hard w-full">
-            <div className="flex flex-col gap-3 items-center justify-center">
-                <div className="flex gap-3 w-full justify-center">
-                    <button onClick={() => setIsEraser(false)} className={`flex-1 py-3 rounded-xl border-2 border-black flex items-center justify-center gap-2 font-black uppercase transition-all ${!isEraser ? 'bg-blue-500 text-white shadow-hard-sm translate-y-[-2px]' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}><Box size={20} strokeWidth={3} /> Bloc</button>
-                    <button onClick={() => setIsEraser(true)} className={`flex-1 py-3 rounded-xl border-2 border-black flex items-center justify-center gap-2 font-black uppercase transition-all ${isEraser ? 'bg-red-500 text-white shadow-hard-sm translate-y-[-2px]' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}><Eraser size={20} strokeWidth={3} /> Gomme</button>
-                    <FunButton onClick={() => onSave(captureRef.current())} color="green" className="py-2 text-sm px-8">FINI !</FunButton>
-                </div>
-                <div className="w-full h-px bg-gray-200"></div>
-                <div className="flex flex-wrap justify-center gap-2 w-full px-2">
-                    {DRAW_COLORS.map((c) => (
-                        <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-black transition-transform ${color === c && !isEraser ? 'ring-4 ring-blue-400 scale-110 z-10 shadow-lg' : 'hover:scale-105'}`} style={{ backgroundColor: c }} />
-                    ))}
-                </div>
-            </div>
+           <div className="flex flex-col gap-3 items-center justify-center">
+               <div className="flex gap-2 w-full justify-center overflow-x-auto pb-2 md:pb-0">
+                   <button onClick={() => setTool('PENCIL')} className={`p-3 rounded-xl border-2 border-black ${tool === 'PENCIL' ? 'bg-blue-500 text-white shadow-hard-sm -translate-y-1' : 'bg-gray-100'}`}><Pencil size={20} /></button>
+                   <button onClick={() => setTool('BUCKET')} className={`p-3 rounded-xl border-2 border-black ${tool === 'BUCKET' ? 'bg-orange-500 text-white shadow-hard-sm -translate-y-1' : 'bg-gray-100'}`}><PaintBucket size={20} /></button>
+                   <button onClick={() => setTool('ERASER')} className={`p-3 rounded-xl border-2 border-black ${tool === 'ERASER' ? 'bg-red-500 text-white shadow-hard-sm -translate-y-1' : 'bg-gray-100'}`}><Eraser size={20} /></button>
+                   <div className="w-px bg-gray-300 h-10 mx-2"></div>
+                   <button onClick={() => setShowGrid(!showGrid)} className={`p-3 rounded-xl border-2 border-black ${showGrid ? 'bg-purple-100 border-purple-500' : 'bg-gray-100'}`}><Grid3X3 size={20} /></button>
+                   <FunButton onClick={handleExport} color="green" className="py-2 text-sm px-6 ml-auto">FINI !</FunButton>
+               </div>
+               <div className="w-full h-px bg-gray-200"></div>
+               <div className="flex flex-wrap justify-center gap-2 w-full px-2">
+                   {DRAW_COLORS.map((c) => (
+                       <button key={c} onClick={() => { setColor(c); if(tool === 'ERASER') setTool('PENCIL'); }} className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-black transition-transform ${color === c && tool !== 'ERASER' ? 'ring-4 ring-blue-400 scale-110 z-10 shadow-lg' : 'hover:scale-105'}`} style={{ backgroundColor: c }} />
+                   ))}
+               </div>
+           </div>
        </div>
     </div>
   );
@@ -815,7 +735,7 @@ export default function App() {
     const ownerId = currentRoom.players[ownerIndex].uid;
 
     let stepType: 'TEXT' | 'DRAWING' = 'DRAWING';
-    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === '3D') {
+    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === 'PIXEL') {
         stepType = currentRoom.round % 2 === 0 ? 'TEXT' : 'DRAWING';
     }
 
@@ -850,7 +770,7 @@ export default function App() {
             const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
             updateDoc(roomRef, { phase: 'VOTE', players: currentRoom.players.map(p => ({...p, isReady: false, hasVoted: false})) });
         } else {
-            let nextPhase: Phase = (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === '3D') 
+            let nextPhase: Phase = (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === 'PIXEL') 
                 ? ((currentRoom.round + 1) % 2 === 0 ? 'GUESS' : 'DRAW') 
                 : 'EXQUISITE_DRAW';
             const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', roomCode);
@@ -925,18 +845,18 @@ export default function App() {
                                 <button onClick={() => me?.isHost && updateMode('CLASSIC')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'CLASSIC' ? 'bg-white border-2 border-black shadow-hard-sm text-black' : 'text-gray-400'}`}><MessageSquare size={14}/> Classique</button>
                                 <button onClick={() => me?.isHost && updateMode('EXQUISITE')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'EXQUISITE' ? 'bg-purple-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Ghost size={14}/> Exquis</button>
                                 <button onClick={() => me?.isHost && updateMode('TRADITIONAL')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'TRADITIONAL' ? 'bg-blue-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Camera size={14}/> Papier</button>
-                                <button onClick={() => me?.isHost && updateMode('3D')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === '3D' ? 'bg-orange-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Box size={14}/> 3D</button>
+                                <button onClick={() => me?.isHost && updateMode('PIXEL')} disabled={!me?.isHost} className={`px-3 py-2 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm ${currentRoom.mode === 'PIXEL' ? 'bg-orange-500 border-2 border-black shadow-hard-sm text-white' : 'text-gray-400'}`}><Grid3X3 size={14}/> Pixel Art</button>
                             </div>
                         </div>
                       </div>
                       <div className="flex justify-center">
-                           {me?.isHost && currentRoom.players.length > 1 ? (
+                            {me?.isHost && currentRoom.players.length > 1 ? (
                               <FunButton onClick={startGame} color="green" icon={Play} className="animate-pop w-full md:w-auto">Lancer la partie !</FunButton>
-                           ) : me?.isHost ? (
+                            ) : me?.isHost ? (
                               <div className="px-4 py-2 bg-yellow-100 border-2 border-black rounded-lg font-bold text-yellow-800 text-center animate-pulse text-sm md:text-base">Attends des potes... (2 min)</div>
-                           ) : (
+                            ) : (
                               <div className="text-purple-600 font-black animate-pulse text-lg md:text-xl">L'hôte configure la partie...</div>
-                           )}
+                            )}
                       </div>
                   </div>
                   <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-6">
@@ -1016,21 +936,21 @@ export default function App() {
             <div className="bg-white border-b-4 border-black p-3 md:p-4 shadow-md z-10 flex justify-between items-center">
                 <div className="flex items-center gap-2 md:gap-4">
                     <div className="bg-black text-white px-2 py-1 md:px-3 rounded font-black uppercase text-xs md:text-sm">
-                        {currentRoom.mode === '3D' ? 'MODÉLISE ÇA' : 'DESSINE ÇA'}
+                        {currentRoom.mode === 'PIXEL' ? 'PIXELISE ÇA' : 'DESSINE ÇA'}
                     </div>
                     <h2 className="text-lg md:text-2xl font-black truncate max-w-[40vw] text-purple-600">"{prevStep.content}"</h2>
                 </div>
-                {currentRoom.mode !== 'TRADITIONAL' && currentRoom.mode !== '3D' && (
+                {currentRoom.mode !== 'TRADITIONAL' && currentRoom.mode !== 'PIXEL' && (
                     <FunButton onClick={() => submitContent()} disabled={!inputContent} color="green" className="px-3 py-1 md:px-4 md:py-2 text-xs md:text-sm">Fini !</FunButton>
                 )}
             </div>
             <div className="flex-1 bg-pattern p-2 md:p-8 flex items-start md:items-center justify-center overflow-hidden relative">
-                 {currentRoom.mode === '3D' ? (
-                     <ThreeDEditor onSave={(data) => submitContent(data)} />
+                 {currentRoom.mode === 'PIXEL' ? (
+                      <PixelArtEditor onSave={(data) => submitContent(data)} />
                  ) : currentRoom.mode === 'TRADITIONAL' ? (
-                     <CameraCapture onCapture={(data) => submitContent(data)} />
+                      <CameraCapture onCapture={(data) => submitContent(data)} />
                  ) : (
-                     <DrawingCanvas onSave={(data) => setInputContent(data)} />
+                      <DrawingCanvas onSave={(data) => setInputContent(data)} />
                  )}
             </div>
         </div>
@@ -1046,11 +966,18 @@ export default function App() {
             <FunCard className="w-full max-w-5xl flex flex-col md:flex-row overflow-hidden p-0 border-0">
                 <div className="w-full md:w-2/3 bg-gray-100 border-b-4 md:border-b-0 md:border-r-4 border-black flex flex-col relative">
                     <div className="absolute top-4 left-4 z-10 bg-yellow-400 border-2 border-black px-3 py-1 rounded-full font-black text-xs shadow-hard-sm">DESSIN DE {prevStep.authorName.toUpperCase()}</div>
-                    <div className="flex-1 flex items-center justify-center bg-white p-4"><img src={prevStep.content} alt="Guess this" className="max-w-full max-h-[40vh] md:max-h-[50vh] object-contain drop-shadow-lg transform rotate-1" /></div>
+                    <div className="flex-1 flex items-center justify-center bg-white p-4">
+                        <img 
+                            src={prevStep.content} 
+                            alt="Guess this" 
+                            className={`max-w-full max-h-[40vh] md:max-h-[50vh] object-contain drop-shadow-lg transform rotate-1 ${currentRoom.mode === 'PIXEL' ? 'image-pixelated' : ''}`} 
+                            style={currentRoom.mode === 'PIXEL' ? { imageRendering: 'pixelated' } : {}}
+                        />
+                    </div>
                 </div>
                 <div className="w-full md:w-1/3 p-6 md:p-8 flex flex-col justify-center space-y-6 bg-white">
-                     <div className="text-center space-y-2"><h2 className="text-2xl md:text-3xl font-black uppercase leading-none">C'est quoi ce truc ?</h2><p className="text-gray-500 font-bold text-sm">Décris ce chef-d'œuvre.</p></div>
-                     <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-24 md:h-32 p-4 text-lg md:text-xl text-center font-bold border-4 border-black rounded-xl focus:outline-none focus:shadow-hard bg-blue-50 resize-none" placeholder="Je pense que c'est..."/>
+                      <div className="text-center space-y-2"><h2 className="text-2xl md:text-3xl font-black uppercase leading-none">C'est quoi ce truc ?</h2><p className="text-gray-500 font-bold text-sm">Décris ce chef-d'œuvre.</p></div>
+                      <textarea value={inputContent} onChange={(e) => setInputContent(e.target.value)} className="w-full h-24 md:h-32 p-4 text-lg md:text-xl text-center font-bold border-4 border-black rounded-xl focus:outline-none focus:shadow-hard bg-blue-50 resize-none" placeholder="Je pense que c'est..."/>
                     <FunButton onClick={() => submitContent()} disabled={!inputContent.trim()} color="purple" icon={CheckCircle}>Valider</FunButton>
                 </div>
             </FunCard>
@@ -1063,7 +990,7 @@ export default function App() {
     if (me?.hasVoted) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-4 text-center text-white space-y-6 bg-pattern"><GlobalStyles /><div className="w-24 h-24 md:w-32 md:h-32 bg-yellow-400 rounded-full border-4 border-black flex items-center justify-center animate-bounce shadow-hard-lg"><Star className="text-black fill-white" size={48} /></div><div><h2 className="text-3xl md:text-4xl font-black uppercase text-yellow-400 drop-shadow-md">Vote Enregistré !</h2><p className="text-white/80 font-bold mt-2 text-lg md:text-xl">Suspense...</p></div><div className="flex flex-wrap gap-3 justify-center mt-8 p-4 bg-black/30 rounded-xl backdrop-blur-sm">{currentRoom.players.map(p => <div key={p.uid} title={p.name} className={`w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-black transition-all ${p.hasVoted ? 'bg-green-400 scale-125' : 'bg-gray-600'}`} />)}</div></div>;
 
     const allDrawings: any[] = [];
-    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === '3D') {
+    if (currentRoom.mode === 'CLASSIC' || currentRoom.mode === 'TRADITIONAL' || currentRoom.mode === 'PIXEL') {
         Object.entries(currentRoom.chains).forEach(([ownerId, chain]) => {
             chain.steps.forEach((step, idx) => {
                 if (step.type === 'DRAWING') allDrawings.push({ chainOwnerId: ownerId, stepIndex: idx, step });
@@ -1097,7 +1024,14 @@ export default function App() {
                                         {item.fullChain.map((part:any, idx:number) => (<img key={idx} src={part.content} className="w-full h-1/3 object-cover border-b border-dashed border-gray-300" alt="Part" />))}
                                     </div>
                                 ) : (
-                                    <div className="aspect-[4/3] bg-gray-50 border-2 border-gray-200 overflow-hidden mb-2"><img src={item.step.content} alt="Candidate" className="w-full h-full object-cover" /></div>
+                                    <div className="aspect-[4/3] bg-gray-50 border-2 border-gray-200 overflow-hidden mb-2">
+                                        <img 
+                                            src={item.step.content} 
+                                            alt="Candidate" 
+                                            className="w-full h-full object-cover"
+                                            style={currentRoom.mode === 'PIXEL' ? { imageRendering: 'pixelated' } : {}}
+                                        />
+                                    </div>
                                 )}
                                 <p className="font-handwriting text-gray-500 font-bold text-sm text-left transform rotate-1">#{i + 1}</p>
                                 {isMine && <div className="absolute inset-0 flex items-center justify-center bg-black/10 font-black text-red-600 text-xl md:text-2xl uppercase tracking-widest -rotate-12 border-4 border-red-600 m-8 rounded-xl bg-white/80">C'est toi !</div>}
@@ -1181,7 +1115,16 @@ function ResultsView({ room, onRestart, currentUserId }: { room: RoomData, onRes
                                                 </div>
                                             </div>
                                             <div className="p-4 md:p-6 min-h-[120px] md:min-h-[150px] flex items-center justify-center bg-white">
-                                                {step.type === 'TEXT' ? <p className="text-2xl md:text-4xl font-black text-center uppercase leading-tight text-gray-800" style={{fontFamily: 'cursive'}}>"{step.content}"</p> : <img src={step.content} alt="Drawing" className="max-w-full border-2 border-gray-200 shadow-inner" />}
+                                                {step.type === 'TEXT' ? 
+                                                    <p className="text-2xl md:text-4xl font-black text-center uppercase leading-tight text-gray-800" style={{fontFamily: 'cursive'}}>"{step.content}"</p> 
+                                                    : 
+                                                    <img 
+                                                        src={step.content} 
+                                                        alt="Drawing" 
+                                                        className="max-w-full border-2 border-gray-200 shadow-inner" 
+                                                        style={room.mode === 'PIXEL' ? { imageRendering: 'pixelated' } : {}}
+                                                    />
+                                                }
                                             </div>
                                         </div>
                                     </div>
