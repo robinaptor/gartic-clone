@@ -1160,16 +1160,22 @@ export default function App() {
                         <label className="block text-lg font-black text-black uppercase tracking-wide">Ton Pseudo</label>
                         <input type="text" value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-4 border-black font-bold text-lg focus:outline-none focus:shadow-hard bg-gray-50" placeholder="SuperArtiste..." maxLength={12}/>
                         
-                        <div className="bg-gray-100 p-3 rounded-xl border-2 border-black flex justify-center">
+                        <div className="bg-gray-100 p-3 rounded-xl border-2 border-black flex justify-center flex-col items-center gap-2">
+                             <p className="font-bold text-xs uppercase text-gray-500">Avatar (Optionnel)</p>
+                             {/* Si l'utilisateur ne dessine rien (playerAvatar vide), le jeu utilisera la lettre + couleur */}
                              <AvatarEditor onSave={setPlayerAvatar} />
                         </div>
                     </div>
                     <div className="flex flex-col gap-3 pt-2">
-                        <FunButton onClick={createRoom} disabled={loading || !playerName || !playerAvatar} color="purple" icon={Palette} className="w-full">Créer une Party</FunButton>
+                        {/* MODIFICATION ICI : J'ai retiré "!playerAvatar" des conditions disabled */}
+                        <FunButton onClick={createRoom} disabled={loading || !playerName} color="purple" icon={Palette} className="w-full">Créer une Party</FunButton>
+                        
                         <div className="flex items-center gap-4"><div className="h-1 flex-1 bg-black rounded-full"></div><span className="font-black text-gray-400">OU</span><div className="h-1 flex-1 bg-black rounded-full"></div></div>
+                        
                         <div className="flex gap-2">
                             <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} className="flex-1 px-4 py-3 rounded-xl border-4 border-black font-mono text-center font-black text-xl uppercase tracking-widest focus:outline-none focus:shadow-hard min-w-0" placeholder="CODE" maxLength={6}/>
-                            <FunButton onClick={joinRoom} disabled={loading || !playerName || !joinCode || !playerAvatar} color="green">GO</FunButton>
+                            {/* MODIFICATION ICI AUSSI */}
+                            <FunButton onClick={joinRoom} disabled={loading || !playerName || !joinCode} color="green">GO</FunButton>
                         </div>
                     </div>
                 </div>
