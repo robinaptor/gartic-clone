@@ -191,7 +191,8 @@ interface Player {
   hasVoted: boolean;
   score: number;
   avatarColor: string;
-  avatarImage?: string; // Image Base64 de l'avatar
+  avatarImage?: string;
+  isSpectator?: boolean; // <--- NOUVEAU
 }
 
 interface GameStep {
@@ -586,6 +587,7 @@ const PixelArtEditor = ({ onSave }: { onSave: (data: string) => void }) => {
 
 // --- COMPOSANT DESSIN STANDARD ---
 // --- COMPOSANT DESSIN ROBUSTE (CORRIGÉ UI) ---
+// --- COMPOSANT DESSIN AMÉLIORÉ (AVEC BUCKET TOOL) ---
 const DrawingCanvas = ({ 
   initialImage, 
   onSave, 
@@ -597,186 +599,281 @@ const DrawingCanvas = ({
   isReadOnly?: boolean,
   guideImage?: string | null
 }) => {
-const canvasRef = useRef<HTMLCanvasElement>(null);
-const containerRef = useRef<HTMLDivElement>(null);
-const [color, setColor] = useState('#000000');
-const [brushSize, setBrushSize] = useState(8);
-const [isEraser, setIsEraser] = useState(false);
-const [history, setHistory] = useState<string[]>([]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [color, setColor] = useState('#000000');
+  const [brushSize, setBrushSize] = useState(8);
+  const [tool, setTool] = useState<'PENCIL' | 'ERASER' | 'BUCKET'>('PENCIL'); // Nouveau state Tool
+  const [history, setHistory] = useState<string[]>([]);
 
-// On garde une résolution interne fixe pour la qualité du dessin
-const internalWidth = 800;
-const internalHeight = 600;
+  const internalWidth = 800;
+  const internalHeight = 600;
+  const state = useRef({ isDrawing: false, lastX: 0, lastY: 0 });
 
-const state = useRef({ isDrawing: false, lastX: 0, lastY: 0 });
+  // --- ALGORITHME DE FLOOD FILL (POT DE PEINTURE) ---
+  const hexToRgb = (hex: string) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 0, b: 0 };
+  };
 
-// Initialisation du canvas
-useEffect(() => {
-  const canvas = canvasRef.current; 
-  const ctx = canvas?.getContext('2d');
-  if (canvas && ctx) {
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      // Fond blanc par défaut
-      if (history.length === 0 && !initialImage) { 
-          ctx.fillStyle = '#ffffff'; 
-          ctx.fillRect(0, 0, canvas.width, canvas.height); 
-      }
-      if (initialImage) { 
-          const img = new Image(); 
-          img.onload = () => ctx.drawImage(img, 0, 0, internalWidth, internalHeight); 
-          img.src = initialImage; 
-      }
-  }
-}, [initialImage]);
-
-const saveState = () => { 
-    const canvas = canvasRef.current; 
-    if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.5)]); 
-};
-
-const getCoords = (e: PointerEvent, canvas: HTMLCanvasElement) => {
-    const rect = canvas.getBoundingClientRect();
-    // Mapping précis des coordonnées souris -> résolution canvas
-    return { 
-        x: (e.clientX - rect.left) * (canvas.width / rect.width), 
-        y: (e.clientY - rect.top) * (canvas.height / rect.height) 
-    };
-};
-
-useEffect(() => {
+  const floodFill = (startX: number, startY: number, fillColorHex: string) => {
     const canvas = canvasRef.current;
-    if (!canvas || isReadOnly) return;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
 
-    const handlePointerDown = (e: PointerEvent) => {
-        e.preventDefault(); canvas.setPointerCapture(e.pointerId);
-        saveState();
-        state.current.isDrawing = true;
-        const { x, y } = getCoords(e, canvas);
-        state.current.lastX = x; state.current.lastY = y;
-        const ctx = canvas.getContext('2d');
-        if (ctx) { 
-            ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y); 
-            ctx.strokeStyle = isEraser ? '#ffffff' : color; 
-            ctx.lineWidth = brushSize; ctx.stroke(); 
+    // Sauvegarder avant modification
+    saveState();
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    
+    // Coordonnées entières
+    const x = Math.floor(startX);
+    const y = Math.floor(startY);
+
+    // Couleur cible (celle sous la souris)
+    const startPos = (y * width + x) * 4;
+    const startR = data[startPos];
+    const startG = data[startPos + 1];
+    const startB = data[startPos + 2];
+    const startA = data[startPos + 3];
+
+    // Couleur de remplissage
+    const { r: fillR, g: fillG, b: fillB } = hexToRgb(fillColorHex);
+    const fillA = 255;
+
+    // Si la couleur est la même, on arrête
+    if (startR === fillR && startG === fillG && startB === fillB && startA === fillA) return;
+
+    const matchStartColor = (pos: number) => {
+      return data[pos] === startR && data[pos + 1] === startG && data[pos + 2] === startB && data[pos + 3] === startA;
+    };
+
+    const colorPixel = (pos: number) => {
+      data[pos] = fillR;
+      data[pos + 1] = fillG;
+      data[pos + 2] = fillB;
+      data[pos + 3] = fillA;
+    };
+
+    const stack = [[x, y]];
+
+    while (stack.length) {
+      const newPos = stack.pop();
+      if(!newPos) continue;
+      const [cx, cy] = newPos;
+      
+      let pixelPos = (cy * width + cx) * 4;
+      
+      // Monter tant qu'on est sur la couleur de départ
+      let currY = cy;
+      while (currY >= 0 && matchStartColor(pixelPos)) {
+        currY--;
+        pixelPos -= width * 4;
+      }
+      pixelPos += width * 4;
+      currY++;
+      
+      let reachLeft = false;
+      let reachRight = false;
+      
+      while (currY < height && matchStartColor(pixelPos)) {
+        colorPixel(pixelPos);
+        
+        if (cx > 0) {
+          if (matchStartColor(pixelPos - 4)) {
+            if (!reachLeft) { stack.push([cx - 1, currY]); reachLeft = true; }
+          } else if (reachLeft) {
+            reachLeft = false;
+          }
         }
-    };
-
-    const handlePointerMove = (e: PointerEvent) => {
-        e.preventDefault(); 
-        if (!state.current.isDrawing) return;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-            const { x, y } = getCoords(e, canvas);
-            ctx.beginPath(); ctx.moveTo(state.current.lastX, state.current.lastY); ctx.lineTo(x, y); 
-            ctx.strokeStyle = isEraser ? '#ffffff' : color; 
-            ctx.lineWidth = brushSize; ctx.stroke();
-            state.current.lastX = x; state.current.lastY = y;
+        
+        if (cx < width - 1) {
+          if (matchStartColor(pixelPos + 4)) {
+            if (!reachRight) { stack.push([cx + 1, currY]); reachRight = true; }
+          } else if (reachRight) {
+            reachRight = false;
+          }
         }
-    };
+        
+        currY++;
+        pixelPos += width * 4;
+      }
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+    onSave(canvas.toDataURL('image/jpeg', 0.4));
+  };
 
-    const handlePointerUp = (e: PointerEvent) => {
-        e.preventDefault();
-        if (state.current.isDrawing) {
-            state.current.isDrawing = false;
-            canvas.releasePointerCapture(e.pointerId);
-            onSave(canvas.toDataURL('image/jpeg', 0.4));
+  // --- GESTION DU CANVAS ---
+
+  useEffect(() => {
+    const canvas = canvasRef.current; 
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx) {
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        if (history.length === 0 && !initialImage) { 
+            ctx.fillStyle = '#ffffff'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height); 
         }
-    };
+        if (initialImage) { 
+            const img = new Image(); 
+            img.onload = () => ctx.drawImage(img, 0, 0, internalWidth, internalHeight); 
+            img.src = initialImage; 
+        }
+    }
+  }, [initialImage]);
 
-    canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
-    canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
-    canvas.addEventListener('pointerup', handlePointerUp);
-    canvas.addEventListener('pointercancel', handlePointerUp);
-    canvas.addEventListener('pointerleave', handlePointerUp);
+  const saveState = () => { 
+      const canvas = canvasRef.current; 
+      if(canvas) setHistory(prev => [...prev.slice(-10), canvas.toDataURL('image/jpeg', 0.5)]); 
+  };
 
-    return () => {
-        canvas.removeEventListener('pointerdown', handlePointerDown);
-        canvas.removeEventListener('pointermove', handlePointerMove);
-        canvas.removeEventListener('pointerup', handlePointerUp);
-        canvas.removeEventListener('pointercancel', handlePointerUp);
-        canvas.removeEventListener('pointerleave', handlePointerUp);
-    };
-}, [isReadOnly, color, brushSize, isEraser]);
+  const getCoords = (e: PointerEvent, canvas: HTMLCanvasElement) => {
+      const rect = canvas.getBoundingClientRect();
+      return { 
+          x: (e.clientX - rect.left) * (canvas.width / rect.width), 
+          y: (e.clientY - rect.top) * (canvas.height / rect.height) 
+      };
+  };
 
-const undo = () => {
-  if (history.length === 0) return;
-  const lastState = history[history.length - 1];
-  setHistory(prev => prev.slice(0, -1));
-  const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-  if (canvas && ctx && lastState) { 
-      const img = new Image(); 
-      img.onload = () => { 
-          ctx.fillStyle = '#ffffff'; 
-          ctx.fillRect(0, 0, canvas.width, canvas.height); 
-          ctx.drawImage(img, 0, 0); 
-          onSave(canvas.toDataURL('image/jpeg', 0.4)); 
-      }; 
-      img.src = lastState; 
-  }
-};
+  useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || isReadOnly) return;
 
-const clearCanvas = () => {
-  const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
-  if(canvas && ctx) { 
-      saveState(); 
-      ctx.fillStyle = '#ffffff'; 
-      ctx.fillRect(0,0,canvas.width, canvas.height); 
-      onSave(canvas.toDataURL('image/jpeg', 0.4)); 
-  }
-};
+      const handlePointerDown = (e: PointerEvent) => {
+          e.preventDefault(); 
+          const { x, y } = getCoords(e, canvas);
+          
+          // SI TOOL EST BUCKET
+          if (tool === 'BUCKET') {
+            floodFill(x, y, color);
+            return;
+          }
 
-return (
-  <div className="flex flex-col h-full w-full max-w-5xl mx-auto items-center justify-center gap-2 md:gap-4">
-      {/* ZONE DE DESSIN RESPONSIVE */}
-      <div 
-          ref={containerRef} 
-          className="relative w-full max-w-full max-h-full aspect-[4/3] bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden group shrink-1 min-h-0"
-      >
-          {guideImage && (
-              <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
-                  <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
-                       <img src={guideImage} className="absolute bottom-0 w-full h-[666%] object-cover object-bottom opacity-70" alt="Guide" />
-                       <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1">RACCORDE ICI</div>
-                  </div>
-              </div>
-          )}
-          <canvas 
-              ref={canvasRef} 
-              width={internalWidth} 
-              height={internalHeight} 
-              className={`w-full h-full touch-none select-none ${isReadOnly ? 'cursor-default' : 'cursor-crosshair'}`} 
-          />
-          {!isReadOnly && (
-              <div className="absolute top-2 left-2 md:top-4 md:left-4 flex gap-2 z-20">
-                  <button onClick={undo} disabled={history.length === 0} className="bg-white border-2 border-black p-2 rounded-lg hover:bg-gray-100 shadow-hard-sm disabled:opacity-50"><Undo size={20}/></button>
-                  <button onClick={clearCanvas} className="bg-red-100 border-2 border-black p-2 rounded-lg hover:bg-red-200 shadow-hard-sm text-red-600"><Trash2 size={20}/></button>
-              </div>
-          )}
-      </div>
+          canvas.setPointerCapture(e.pointerId);
+          saveState();
+          state.current.isDrawing = true;
+          state.current.lastX = x; state.current.lastY = y;
+          const ctx = canvas.getContext('2d');
+          if (ctx) { 
+              ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y); 
+              ctx.strokeStyle = tool === 'ERASER' ? '#ffffff' : color; 
+              ctx.lineWidth = brushSize; ctx.stroke(); 
+          }
+      };
 
-      {/* BARRE D'OUTILS (NE BOUGE PLUS) */}
-      {!isReadOnly && (
-          <div className="bg-white border-4 border-black rounded-2xl p-2 shadow-hard w-full shrink-0">
-              <div className="flex flex-col md:flex-row gap-2 md:gap-4 items-center justify-center">
-                  <div className="flex w-full md:w-auto justify-between md:justify-start gap-4 items-center border-b-2 md:border-b-0 border-gray-200 pb-2 md:pb-0">
-                      <div className="flex gap-2">
-                          <button onClick={() => setIsEraser(false)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${!isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Pencil size={20} /></button>
-                          <button onClick={() => setIsEraser(true)} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${isEraser ? 'bg-purple-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Eraser size={20} /></button>
-                      </div>
-                      <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
-                      <div className="flex gap-1 md:gap-2 items-center">
-                          {BRUSH_SIZES.map(size => <button key={size} onClick={() => setBrushSize(size)} className={`rounded-full bg-black transition-all ${brushSize === size ? 'ring-4 ring-yellow-400 scale-110' : 'opacity-30'}`} style={{ width: size/2 + 6, height: size/2 + 6 }} />)}
-                      </div>
-                  </div>
-                  <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
-                  <div className="flex flex-wrap justify-center gap-1 md:gap-2 w-full md:w-auto">
-                      {DRAW_COLORS.map((c) => <button key={c} onClick={() => { setColor(c); setIsEraser(false); }} className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 border-black transition-transform shadow-sm ${color === c && !isEraser ? 'ring-4 ring-yellow-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />)}
-                  </div>
-              </div>
-          </div>
-      )}
-  </div>
-);
+      const handlePointerMove = (e: PointerEvent) => {
+          e.preventDefault(); 
+          if (!state.current.isDrawing) return;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              const { x, y } = getCoords(e, canvas);
+              ctx.beginPath(); ctx.moveTo(state.current.lastX, state.current.lastY); ctx.lineTo(x, y); 
+              ctx.strokeStyle = tool === 'ERASER' ? '#ffffff' : color; 
+              ctx.lineWidth = brushSize; ctx.stroke();
+              state.current.lastX = x; state.current.lastY = y;
+          }
+      };
+
+      const handlePointerUp = (e: PointerEvent) => {
+          e.preventDefault();
+          if (state.current.isDrawing) {
+              state.current.isDrawing = false;
+              canvas.releasePointerCapture(e.pointerId);
+              onSave(canvas.toDataURL('image/jpeg', 0.4));
+          }
+      };
+
+      canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
+      canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
+      canvas.addEventListener('pointerup', handlePointerUp);
+      canvas.addEventListener('pointerleave', handlePointerUp);
+
+      return () => {
+          canvas.removeEventListener('pointerdown', handlePointerDown);
+          canvas.removeEventListener('pointermove', handlePointerMove);
+          canvas.removeEventListener('pointerup', handlePointerUp);
+          canvas.removeEventListener('pointerleave', handlePointerUp);
+      };
+  }, [isReadOnly, color, brushSize, tool]); // Dépendance 'tool' ajoutée
+
+  const undo = () => {
+    if (history.length === 0) return;
+    const lastState = history[history.length - 1];
+    setHistory(prev => prev.slice(0, -1));
+    const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
+    if (canvas && ctx && lastState) { 
+        const img = new Image(); 
+        img.onload = () => { 
+            ctx.fillStyle = '#ffffff'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height); 
+            ctx.drawImage(img, 0, 0); 
+            onSave(canvas.toDataURL('image/jpeg', 0.4)); 
+        }; 
+        img.src = lastState; 
+    }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current; const ctx = canvas?.getContext('2d');
+    if(canvas && ctx) { 
+        saveState(); 
+        ctx.fillStyle = '#ffffff'; 
+        ctx.fillRect(0,0,canvas.width, canvas.height); 
+        onSave(canvas.toDataURL('image/jpeg', 0.4)); 
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full w-full max-w-5xl mx-auto items-center justify-center gap-2 md:gap-4">
+        <div className="relative w-full max-w-full max-h-full aspect-[4/3] bg-white rounded-xl border-4 border-black shadow-hard-lg overflow-hidden shrink-1 min-h-0">
+            {guideImage && (
+                <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 opacity-100">
+                    <div className="w-full h-[15%] overflow-hidden relative border-b-2 border-dashed border-red-500 bg-white/50">
+                         <img src={guideImage} className="absolute bottom-0 w-full h-[666%] object-cover object-bottom opacity-70" alt="Guide" />
+                         <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1">RACCORDE ICI</div>
+                    </div>
+                </div>
+            )}
+            <canvas 
+                ref={canvasRef} 
+                width={internalWidth} 
+                height={internalHeight} 
+                className={`w-full h-full touch-none select-none ${isReadOnly ? 'cursor-default' : tool === 'BUCKET' ? 'cursor-[url(https://api.iconify.design/lucide/paint-bucket.svg),_pointer]' : 'cursor-crosshair'}`} 
+            />
+            {!isReadOnly && (
+                <div className="absolute top-2 left-2 md:top-4 md:left-4 flex gap-2 z-20">
+                    <button onClick={undo} disabled={history.length === 0} className="bg-white border-2 border-black p-2 rounded-lg hover:bg-gray-100 shadow-hard-sm disabled:opacity-50"><Undo size={20}/></button>
+                    <button onClick={clearCanvas} className="bg-red-100 border-2 border-black p-2 rounded-lg hover:bg-red-200 shadow-hard-sm text-red-600"><Trash2 size={20}/></button>
+                </div>
+            )}
+        </div>
+
+        {!isReadOnly && (
+            <div className="bg-white border-4 border-black rounded-2xl p-2 shadow-hard w-full shrink-0">
+                <div className="flex flex-col md:flex-row gap-2 md:gap-4 items-center justify-center">
+                    <div className="flex w-full md:w-auto justify-between md:justify-start gap-4 items-center border-b-2 md:border-b-0 border-gray-200 pb-2 md:pb-0">
+                        <div className="flex gap-2">
+                            <button onClick={() => setTool('PENCIL')} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${tool === 'PENCIL' ? 'bg-blue-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Pencil size={20} /></button>
+                            <button onClick={() => setTool('BUCKET')} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${tool === 'BUCKET' ? 'bg-orange-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><PaintBucket size={20} /></button>
+                            <button onClick={() => setTool('ERASER')} className={`p-2 md:p-3 rounded-xl border-2 border-black transition-transform ${tool === 'ERASER' ? 'bg-red-500 text-white -translate-y-1 shadow-hard-sm' : 'bg-gray-100 text-gray-600'}`}><Eraser size={20} /></button>
+                        </div>
+                        <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
+                        <div className="flex gap-1 md:gap-2 items-center">
+                            {BRUSH_SIZES.map(size => <button key={size} onClick={() => setBrushSize(size)} className={`rounded-full bg-black transition-all ${brushSize === size ? 'ring-4 ring-yellow-400 scale-110' : 'opacity-30'}`} style={{ width: size/2 + 6, height: size/2 + 6 }} />)}
+                        </div>
+                    </div>
+                    <div className="h-8 w-px bg-gray-300 hidden md:block"></div>
+                    <div className="flex flex-wrap justify-center gap-1 md:gap-2 w-full md:w-auto">
+                        {DRAW_COLORS.map((c) => <button key={c} onClick={() => { setColor(c); if (tool === 'ERASER') setTool('PENCIL'); }} className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 border-black transition-transform shadow-sm ${color === c && tool !== 'ERASER' ? 'ring-4 ring-yellow-400 scale-110 z-10' : ''}`} style={{ backgroundColor: c }} />)}
+                    </div>
+                </div>
+            </div>
+        )}
+    </div>
+  );
 };
 
 // --- COMPOSANT CAMÉRA ---
@@ -867,6 +964,75 @@ const CameraCapture = ({ onCapture }: { onCapture: (data: string) => void }) => 
         </div>
     );
 };
+
+const SpectatorView = ({ room, myId }: { room: RoomData, myId: string }) => {
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  
+  // Filtre les joueurs qui ne sont PAS spectateurs pour ne regarder que ceux qui jouent
+  const activePlayers = room.players.filter(p => !p.isSpectator);
+  const focusedPlayer = activePlayers[focusedIndex] || activePlayers[0];
+
+  const nextPlayer = () => setFocusedIndex((prev) => (prev + 1) % activePlayers.length);
+  const prevPlayer = () => setFocusedIndex((prev) => (prev - 1 + activePlayers.length) % activePlayers.length);
+
+  return (
+      <div className="min-h-screen bg-gray-800 flex flex-col items-center justify-center p-4 font-sans relative">
+          <GlobalStyles />
+          
+          {/* Header Spectateur */}
+          <div className="absolute top-4 left-4 bg-red-600 text-white px-4 py-2 rounded-full border-2 border-white shadow-hard font-black animate-pulse flex items-center gap-2">
+              <div className="w-3 h-3 bg-white rounded-full animate-ping"/>
+              SPECTATEUR
+          </div>
+
+          {/* Main Card */}
+          <div className="w-full max-w-lg relative">
+              {/* Flèches Navigation */}
+              <button onClick={prevPlayer} className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-4 md:-translate-x-16 bg-white p-3 rounded-full border-4 border-black shadow-hard hover:scale-110 transition-transform z-20">
+                  <ArrowRight className="rotate-180" size={32}/>
+              </button>
+              <button onClick={nextPlayer} className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-4 md:translate-x-16 bg-white p-3 rounded-full border-4 border-black shadow-hard hover:scale-110 transition-transform z-20">
+                  <ArrowRight size={32}/>
+              </button>
+
+              <FunCard className="text-center pb-12 pt-12 relative overflow-visible">
+                  {/* Badge Joueur observé */}
+                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex flex-col items-center">
+                      <div className={`w-24 h-24 rounded-full border-4 border-black ${focusedPlayer.avatarColor} flex items-center justify-center overflow-hidden shadow-hard`}>
+                           {focusedPlayer.avatarImage ? <img src={focusedPlayer.avatarImage} className="w-full h-full object-cover"/> : <User size={40} color="white"/>}
+                      </div>
+                  </div>
+
+                  <h2 className="text-3xl font-black mt-8 mb-2 uppercase">{focusedPlayer.name}</h2>
+                  
+                  <div className="bg-gray-100 rounded-xl p-4 border-2 border-black min-h-[100px] flex flex-col items-center justify-center gap-2">
+                      {focusedPlayer.isReady ? (
+                          <>
+                              <CheckCircle className="text-green-500 w-12 h-12 mb-2" />
+                              <p className="font-bold text-green-600 uppercase">A terminé son tour !</p>
+                          </>
+                      ) : (
+                          <>
+                              <Loader2 className="text-blue-500 w-12 h-12 mb-2 animate-spin" />
+                              <p className="font-bold text-blue-600 uppercase animate-pulse">
+                                  {room.phase === 'DRAW' || room.phase === 'EXQUISITE_DRAW' ? 'Est en train de dessiner...' : 'Est en train d\'écrire...'}
+                              </p>
+                          </>
+                      )}
+                  </div>
+
+                  <p className="mt-4 text-gray-400 text-sm font-bold">
+                      (Tu verras le résultat à la fin du chrono)
+                  </p>
+              </FunCard>
+          </div>
+          
+          <div className="mt-8 text-white font-bold opacity-50">
+              Joueur {focusedIndex + 1} / {activePlayers.length}
+          </div>
+      </div>
+  );
+}
 
 // ==========================================
 // 8. COMPOSANT PRINCIPAL (APP)
@@ -982,25 +1148,41 @@ export default function App() {
         const snap = await getDoc(roomRef);
         if (snap.exists()) {
             const data = snap.data() as RoomData;
-            if (data.phase !== 'LOBBY') { alert("Trop tard, la partie a commencé !"); setLoading(false); return; }
+            
+            // MODIFICATION ICI : On détermine si c'est un spectateur
+            const isSpectator = data.phase !== 'LOBBY'; 
+            
             let updatedPlayers = [...data.players];
             const existingIndex = updatedPlayers.findIndex(p => p.uid === myId);
             const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
             
-            const playerObj = { 
+            const playerObj: Player = { 
                 uid: myId, 
                 name: playerName, 
                 isHost: false, 
-                isReady: false, 
-                hasVoted: false, 
+                isReady: isSpectator, // Un spectateur est toujours "prêt" pour ne pas bloquer
+                hasVoted: isSpectator, // Il ne vote pas (ou compte comme ayant voté)
                 score: 0, 
                 avatarColor: randomColor,
-                avatarImage: playerAvatar
+                avatarImage: playerAvatar,
+                isSpectator: isSpectator // Marqueur important
             };
 
-            if (existingIndex >= 0) { updatedPlayers[existingIndex] = { ...updatedPlayers[existingIndex], name: playerName, avatarImage: playerAvatar }; } 
-            else { updatedPlayers.push(playerObj); }
-            await updateDoc(roomRef, { players: updatedPlayers }); setRoomCode(code); 
+            if (existingIndex >= 0) { 
+                // Si le joueur revient, on garde son statut (sauf s'il était spectateur)
+                updatedPlayers[existingIndex] = { 
+                    ...updatedPlayers[existingIndex], 
+                    name: playerName, 
+                    avatarImage: playerAvatar,
+                    // Si on rejoint en cours, on force le mode spectateur si on n'était pas déjà dans la liste active
+                    isSpectator: isSpectator && !updatedPlayers[existingIndex].isSpectator ? false : isSpectator
+                }; 
+            } else { 
+                updatedPlayers.push(playerObj); 
+            }
+            
+            await updateDoc(roomRef, { players: updatedPlayers }); 
+            setRoomCode(code); 
             playPop();
         } else { alert("Code invalide !"); }
     } catch (error) { console.error("Erreur JOIN:", error); alert("Oups, impossible de rejoindre."); }
@@ -1203,6 +1385,11 @@ export default function App() {
             {muted ? <VolumeX size={20}/> : <Volume2 size={20}/>}
         </button>
 
+        {/* --- VIEW: SPECTATOR --- */}
+        {me?.isSpectator && !['LOBBY', 'RESULTS', 'VOTE', 'PODIUM'].includes(currentRoom.phase) && (
+            <SpectatorView room={currentRoom} myId={myId || ''} />
+        )}
+
         {/* --- VIEW: LOBBY --- */}
         {currentRoom.phase === 'LOBBY' && (
           <div className="min-h-screen bg-pattern p-4 md:p-6 font-sans">
@@ -1267,7 +1454,8 @@ export default function App() {
         )}
 
         {/* --- VIEW: WAITING --- */}
-        {me?.isReady && !['LOBBY','RESULTS', 'VOTE', 'PODIUM'].includes(currentRoom.phase) && (
+        {/* MODIFICATION : Ajout de !me?.isSpectator */}
+        {me?.isReady && !me?.isSpectator && !['LOBBY','RESULTS', 'VOTE', 'PODIUM'].includes(currentRoom.phase) && (
             <div className="min-h-screen bg-pattern flex flex-col items-center justify-center p-4 text-center space-y-8">
                 <GlobalStyles />
                 <FunCard className="animate-float flex flex-col items-center p-8 md:p-12">
@@ -1278,8 +1466,8 @@ export default function App() {
             </div>
         )}
 
-        {/* --- VIEW: GAME PHASES --- */}
-        {!me?.isReady && (
+        {/* MODIFICATION : Ajout de !me?.isSpectator */}
+        {!me?.isReady && !me?.isSpectator && (
             <>
                 {currentRoom.phase === 'EXQUISITE_DRAW' && (
                     <div className="min-h-screen bg-purple-600 flex flex-col font-sans">
