@@ -56,6 +56,11 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
+if (!firebaseConfig.apiKey) {
+    console.error("Firebase config missing!");
+    // Eviter un alert bloquant au chargement, mais logger
+}
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -1105,45 +1110,72 @@ export default function App() {
   // --- LOGIQUE DE JEU (ACTIONS) ---
 
   const createRoom = async () => {
-    if (!playerName.trim() || !user || !myId) return;
+    if (!playerName.trim()) {
+        alert("Entre un pseudo !");
+        return;
+    }
+    if (!user) {
+        alert("Erreur: Non connecté au serveur de jeu (Firebase). Vérifie ta connexion internet.");
+        return;
+    }
     setLoading(true);
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', code);
-    const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+    
+    try {
+        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', code);
+        const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
-    const newPlayer: Player = { 
-        uid: myId, 
-        name: playerName, 
-        isHost: true, 
-        isReady: false, 
-        hasVoted: false, 
-        score: 0, 
-        avatarColor: randomColor,
-        avatarImage: playerAvatar 
-    };
-    const newRoom: RoomData = { 
-        code, 
-        mode: 'CLASSIC', 
-        players: [newPlayer], 
-        phase: 'LOBBY', 
-        round: 0, 
-        chains: {}, 
-        maxRounds: 3, 
-        createdAt: Date.now(),
-        timerDuration: 0 
-    };
+        const newPlayer: Player = { 
+            uid: myId!, // Safe because we checked user above, but myId depends on it
+            name: playerName, 
+            isHost: true, 
+            isReady: false, 
+            hasVoted: false, 
+            score: 0, 
+            avatarColor: randomColor,
+            avatarImage: playerAvatar 
+        };
+        const newRoom: RoomData = { 
+            code, 
+            mode: 'CLASSIC', 
+            players: [newPlayer], 
+            phase: 'LOBBY', 
+            round: 0, 
+            chains: {}, 
+            maxRounds: 3, 
+            createdAt: Date.now(),
+            timerDuration: 0 
+        };
 
-    await setDoc(roomRef, newRoom);
-    setRoomCode(code);
-    setLoading(false);
-    playPop();
+        await setDoc(roomRef, newRoom);
+        setRoomCode(code);
+        playPop();
+    } catch (e: any) {
+        console.error("Erreur création room:", e);
+        alert("Impossible de créer la partie : " + (e.message || "Erreur inconnue"));
+    } finally {
+        setLoading(false);
+    }
   };
 
   const joinRoom = async () => {
-    if (!playerName.trim() || !joinCode.trim() || !user || !myId) return;
+    if (!playerName.trim()) {
+        alert("Choisis un pseudo !");
+        return;
+    }
+    if (!joinCode.trim()) {
+        alert("Entre un code !");
+        return;
+    }
+    if (!user) {
+        alert("Erreur: Non connecté (Firebase).");
+        return;
+    }
+
     setLoading(true);
     const code = joinCode.toUpperCase();
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'gartic_rooms', code);
+    
     try {
         const snap = await getDoc(roomRef);
         if (snap.exists()) {
@@ -1157,7 +1189,7 @@ export default function App() {
             const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
             
             const playerObj: Player = { 
-                uid: myId, 
+                uid: myId!, 
                 name: playerName, 
                 isHost: false, 
                 isReady: isSpectator, // Un spectateur est toujours "prêt" pour ne pas bloquer
@@ -1184,9 +1216,15 @@ export default function App() {
             await updateDoc(roomRef, { players: updatedPlayers }); 
             setRoomCode(code); 
             playPop();
-        } else { alert("Code invalide !"); }
-    } catch (error) { console.error("Erreur JOIN:", error); alert("Oups, impossible de rejoindre."); }
-    setLoading(false);
+        } else { 
+            alert("Code invalide ou partie terminée !"); 
+        }
+    } catch (error: any) { 
+        console.error("Erreur JOIN:", error); 
+        alert("Oups, impossible de rejoindre : " + (error.message || "Erreur inconnue")); 
+    } finally {
+        setLoading(false);
+    }
   };
 
   const updateTimerSettings = async (duration: number) => {
