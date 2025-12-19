@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- RÈGLES POUR GARTIC CLONE ---
+    // ID Application: gartic-final-omega-v7-ultimate
+    // Autorise la lecture et l'écriture pour tout le monde sur les rooms du jeu
+    
+    match /artifacts/gartic-final-omega-v7-ultimate/public/data/gartic_rooms/{roomCode} {
+      allow read, write: if true;
+    }
+    
+    // Si tu as besoin d'accéder aux sous-collections (si tu en utilises plus tard)
+    match /artifacts/gartic-final-omega-v7-ultimate/public/data/gartic_rooms/{roomCode}/{document=**} {
+      allow read, write: if true;
+    }
+
+    // --------------------------------
+    
+    // Garde tes autres règles ici si tu en as...
+  }
+}
